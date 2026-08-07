@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { ideas } from "@/lib/db/schema";
 
@@ -11,7 +11,18 @@ export async function listIdeas(workspaceId: string, status?: string) {
   const where = status
     ? and(eq(ideas.workspaceId, workspaceId), eq(ideas.status, status as never))
     : eq(ideas.workspaceId, workspaceId);
-  return db.select().from(ideas).where(where).orderBy(desc(ideas.createdAt));
+  return db
+    .select({
+      ...getTableColumns(ideas),
+      // champ additif (cards de l'inbox) — les colonnes existantes ne bougent pas.
+      // Identifiants qualifiés À LA MAIN : en interpolant ${ideas.id}, drizzle
+      // émet "id" non qualifié, que Postgres lie à contents.id (portée la plus
+      // proche) → compte toujours 0.
+      contentsCount: sql<number>`(select count(*)::int from contents c where c.idea_id = ideas.id)`,
+    })
+    .from(ideas)
+    .where(where)
+    .orderBy(desc(ideas.createdAt));
 }
 
 export async function getIdea(workspaceId: string, id: string) {

@@ -2,7 +2,8 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { SectionCard } from "@/components/cockpit/section-card";
+import { StatusBadge } from "@/components/cockpit/status-badge";
 
 type Idea = { id: string; title: string; notes: string; status: string };
 type Content = { id: string; channelId: string; status: string; type: string };
@@ -46,37 +47,68 @@ export default function IdeaPage({ params }: { params: Promise<{ id: string }> }
     router.push(`/contents/${contentId}`);
   }
 
-  if (!idea) return <p>Chargement…</p>;
+  if (!idea) return <p className="text-sm text-muted">Chargement…</p>;
   const channelName = (cid: string) =>
     channels.find((c) => c.id === cid)?.name ?? "canal";
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">{idea.title}</h1>
-        {idea.notes && (
-          <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{idea.notes}</p>
+      <div className="flex items-start justify-between gap-4">
+        <h1 className="text-lg leading-snug font-semibold tracking-tight">
+          {idea.title}
+        </h1>
+        <StatusBadge kind="idea" value={idea.status} className="mt-1" />
+      </div>
+
+      {error && <p className="text-sm text-danger">{error}</p>}
+
+      {idea.notes && (
+        <SectionCard title="Notes">
+          <p className="text-sm leading-relaxed whitespace-pre-wrap text-muted">
+            {idea.notes}
+          </p>
+        </SectionCard>
+      )}
+
+      <SectionCard title="Décliner sur un canal">
+        <div className="flex flex-wrap gap-2">
+          {channels.map((c) => (
+            <Button key={c.id} variant="outline" onClick={() => decline(c.key)}>
+              {c.name}
+            </Button>
+          ))}
+          {channels.length === 0 && (
+            <p className="text-sm text-muted">Aucun canal configuré.</p>
+          )}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Contenus"
+        badge={
+          <span className="text-[11px] text-faint tabular-nums">
+            {contentsList.length}
+          </span>
+        }
+      >
+        {contentsList.length === 0 ? (
+          <p className="text-sm text-muted">
+            Aucun contenu — décline l&apos;idée sur un canal pour commencer.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {contentsList.map((c) => (
+              <li key={c.id}>
+                <a href={`/contents/${c.id}`}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-line bg-raised/40 p-3 transition-colors duration-150 hover:border-line-strong">
+                  <span className="text-sm font-medium">{channelName(c.channelId)}</span>
+                  <StatusBadge kind="content" value={c.status} />
+                </a>
+              </li>
+            ))}
+          </ul>
         )}
-      </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="flex gap-2">
-        {channels.map((c) => (
-          <Button key={c.id} variant="outline" onClick={() => decline(c.key)}>
-            Décliner sur {c.name}
-          </Button>
-        ))}
-      </div>
-      <ul className="space-y-2">
-        {contentsList.map((c) => (
-          <li key={c.id}>
-            <a href={`/contents/${c.id}`}
-              className="flex items-center justify-between rounded-lg border p-3 hover:bg-accent">
-              <span>{channelName(c.channelId)}</span>
-              <Badge variant="outline">{c.status}</Badge>
-            </a>
-          </li>
-        ))}
-      </ul>
+      </SectionCard>
     </div>
   );
 }

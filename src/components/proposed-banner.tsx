@@ -11,14 +11,14 @@ export function ProposedBanner({
 }) {
   const parts = diffLines(currentBody, proposedBody);
   return (
-    <div className="rounded-lg border border-blue-400 bg-blue-50 p-4 space-y-3">
+    <div className="space-y-3 rounded-xl border border-accent/40 bg-accent-soft p-4">
       <p className="text-sm font-medium">
         L&apos;agent a proposé une nouvelle version pendant que tu éditais :
       </p>
-      <pre className="max-h-64 overflow-auto rounded bg-white p-3 text-xs leading-5">
+      <pre className="max-h-64 overflow-auto rounded-lg border border-line bg-bg p-3 text-xs leading-5">
         {parts.map((part, i) => (
           <span key={i}
-            className={part.added ? "block bg-green-100" : part.removed ? "block bg-red-100 line-through" : "block"}>
+            className={part.added ? "block bg-success/15" : part.removed ? "block bg-danger/15 text-muted line-through" : "block"}>
             {part.value}
           </span>
         ))}

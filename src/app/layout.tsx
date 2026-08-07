@@ -17,11 +17,15 @@ export const metadata: Metadata = {
   description: "Studio de contenu open source, MCP-first.",
 };
 
+export const viewport = {
+  themeColor: "#0a0a0c",
+};
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="fr"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

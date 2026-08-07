@@ -2,7 +2,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { ContentEditor, type ContentEditorHandle } from "@/components/editor";
 import { ExportButton } from "@/components/export-button";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/cockpit/status-badge";
 import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 import { ProposedBanner } from "@/components/proposed-banner";
 import { RevisionsPanel, type Revision } from "@/components/revisions-panel";
@@ -201,30 +201,38 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
     loadRevisions();
   }
 
-  if (!content) return <p>Chargement…</p>;
+  if (!content) return <p className="text-sm text-muted">Chargement…</p>;
 
   const proposed = revisions.find((r) => r.state === "proposed");
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="font-semibold">{content.channel.name}</h1>
-          <Badge>{content.status}</Badge>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <h1 className="truncate text-lg font-semibold tracking-tight">
+            {content.channel.name}
+          </h1>
+          <StatusBadge kind="content" value={content.status} />
         </div>
-        <div className="flex items-center gap-2">
-          {STATUSES.map((s) => (
-            <button key={s} onClick={() => setStatus(s)}
-              className={`rounded px-2 py-1 text-xs border ${s === content.status ? "bg-accent font-medium" : ""}`}>
-              {s}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-full border border-line bg-raised p-0.5">
+            {STATUSES.map((s) => (
+              <button key={s} onClick={() => setStatus(s)}
+                className={`rounded-full px-2.5 py-1 text-[11px] font-medium tracking-wider uppercase transition-colors duration-150 ${
+                  s === content.status
+                    ? "bg-accent-soft text-accent"
+                    : "text-muted hover:text-ink"
+                }`}>
+                {s}
+              </button>
+            ))}
+          </div>
           <ExportButton body={content.body}
             format={content.channel.constraints.export_format ?? "markdown"} />
         </div>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {note && <p className="text-sm text-muted-foreground">{note}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
+      {note && <p className="text-sm text-muted">{note}</p>}
       {proposed && (
         <ProposedBanner
           currentBody={content.body}

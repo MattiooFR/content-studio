@@ -232,14 +232,14 @@ export const ContentEditor = forwardRef<ContentEditorHandle, {
   }), [editor]);
 
   return (
-    <div className="space-y-1">
-      <div className="prose prose-sm max-w-none rounded-lg border p-4 min-h-[400px]">
+    <div className="space-y-1.5">
+      <div className="min-h-[400px] rounded-xl border border-line bg-surface p-6 transition-colors duration-150 focus-within:border-line-strong">
         <EditorContent editor={editor} />
       </div>
-      <p className="text-xs text-muted-foreground h-4">
+      <p className="h-4 text-xs text-muted">
         {saveStatus === "saving" && "Enregistrement…"}
         {saveStatus === "saved" && "Enregistré"}
-        {saveStatus === "error" && <span className="text-red-600">Échec d&apos;enregistrement</span>}
+        {saveStatus === "error" && <span className="text-danger">Échec d&apos;enregistrement</span>}
       </p>
     </div>
   );
