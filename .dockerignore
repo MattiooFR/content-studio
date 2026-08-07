@@ -1,0 +1,28 @@
+# Contexte de build Docker — n'inclure QUE ce dont `npm run build` / le runtime
+# a réellement besoin (src/, public/, package*.json, configs TS/Next/Tailwind,
+# drizzle/, drizzle.config.ts, components.json). Tout le reste est exclu :
+# secrets locaux (.env.local), historique git, node_modules host (recréé dans
+# l'image via `npm ci` — un `COPY . .` sans ce fichier écrasait sinon les
+# node_modules linux fraîchement installés par ceux du Mac hôte), et tout
+# artefact de doc/plan qui ne sert ni au build ni au runtime.
+
+node_modules
+.git
+.next
+tsconfig.tsbuildinfo
+
+# secrets locaux — ne doivent JAMAIS cuire dans une couche d'image
+.env
+.env.*
+!.env.example
+
+# plans, revues, docs — aucune valeur pour le build
+.superpowers
+docs
+data
+*.md
+LICENSE
+
+# tests — ne tournent pas dans l'image (vitest, pas next build)
+tests
+vitest.config.ts

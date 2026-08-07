@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:18
+    ports:
+      - "127.0.0.1:55434:5432"
+    environment:
+      POSTGRES_USER: cs
+      POSTGRES_PASSWORD: cs
+      POSTGRES_DB: content_studio
+      # postgres:18 attend un layout de data dir major-version-specific ;
+      # sans ce PGDATA nested, le conteneur crash au boot sur un volume
+      # monté directement sur /var/lib/postgresql/data (docker-library/postgres#1259).
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
+  app:
+    build: .
+    ports:
+      - "3003:3003"
+    environment:
+      DATABASE_URL: postgres://cs:cs@postgres:5432/content_studio
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET requis}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3003}
+    depends_on:
+      - postgres
+volumes:
+  pgdata:
