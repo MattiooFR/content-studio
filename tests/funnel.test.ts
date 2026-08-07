@@ -50,8 +50,8 @@ describe("computeFunnel — agrégat par canal", () => {
     const a3 = await contentOn(ws.workspaceId, "Idée A3", "community");
     await setStatusRaw(a3.contentId, "rejected");
 
-    // --- canal "seo_article" : approved ne doit compter dans AUCUN bucket
-    // de statut, mais l'idée compte quand même dans `ideas` ---
+    // --- canal "seo_article" : approved a sa PROPRE colonne (ne s'ajoute ni
+    // à inReview ni à published), et l'idée compte quand même dans `ideas` ---
     const a4 = await contentOn(ws.workspaceId, "Idée A4", "seo_article");
     await setStatusRaw(a4.contentId, "draft");
     const { contentId: a4c2 } = await createContentDraft({
@@ -79,6 +79,7 @@ describe("computeFunnel — agrégat par canal", () => {
       ideas: 3, // A1, A2, A3 — distinctes (A1 a 2 contenus)
       drafts: 1,
       inReview: 2, // le vieilli + le frais
+      approved: 0,
       published: 1,
       rejected: 1,
       bottleneck: "1 contenus en review depuis plus de 7 jours",
@@ -90,9 +91,10 @@ describe("computeFunnel — agrégat par canal", () => {
       ideas: 1, // A4 seule, malgré 2 contenus (draft + approved)
       drafts: 1,
       inReview: 0,
+      approved: 1, // sa propre colonne — ne disparaît pas du pipeline
       published: 0,
       rejected: 0,
-      bottleneck: null, // approved n'alimente aucun bucket, ni le goulot
+      bottleneck: null, // approved n'alimente aucun autre bucket, ni le goulot
     });
 
     expect(linkedin).toEqual({
@@ -101,6 +103,7 @@ describe("computeFunnel — agrégat par canal", () => {
       ideas: 0,
       drafts: 0,
       inReview: 0,
+      approved: 0,
       published: 0,
       rejected: 0,
       bottleneck: null,

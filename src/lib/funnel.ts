@@ -7,6 +7,7 @@ export type FunnelRow = {
   ideas: number;
   drafts: number;
   inReview: number;
+  approved: number;
   published: number;
   rejected: number;
   bottleneck: string | null;
@@ -18,6 +19,7 @@ type Row = {
   ideas: number;
   drafts: number;
   in_review: number;
+  approved: number;
   published: number;
   rejected: number;
   stale_review: number;
@@ -33,9 +35,12 @@ type Row = {
  * `src/lib/ideas.ts` — drizzle peut émettre un identifiant non qualifié que
  * Postgres relie à la mauvaise table dans la portée la plus proche.
  *
- * `approved` compte dans `ideas` (l'idée a bien un contenu sur ce canal) mais
- * n'alimente ni drafts/inReview/published/rejected ni le goulot : décision du
- * brief W6 — aucun regroupement croisé entre statuts.
+ * `approved` est un champ à part entière (arbitrage post-W6, 2026-08-08) :
+ * la première version l'omettait de la sortie ("TELS QUELS" du brief W6 mal
+ * lu contre l'exemple sans approved du brief W7), ce qui faisait disparaître
+ * un contenu approuvé du pipeline affiché — ni en review, ni publié. Aucun
+ * regroupement croisé entre statuts : approved ne s'ajoute ni à inReview ni
+ * à published, il a sa propre colonne.
  */
 export async function computeFunnel(workspaceId: string): Promise<FunnelRow[]> {
   const rows = (await db.execute(sql`
@@ -45,6 +50,7 @@ export async function computeFunnel(workspaceId: string): Promise<FunnelRow[]> {
       count(distinct ct.idea_id)::int as ideas,
       count(*) filter (where ct.status = 'draft')::int as drafts,
       count(*) filter (where ct.status = 'review')::int as in_review,
+      count(*) filter (where ct.status = 'approved')::int as approved,
       count(*) filter (where ct.status = 'published')::int as published,
       count(*) filter (where ct.status = 'rejected')::int as rejected,
       count(*) filter (
@@ -66,6 +72,7 @@ export async function computeFunnel(workspaceId: string): Promise<FunnelRow[]> {
       ideas: Number(r.ideas),
       drafts: Number(r.drafts),
       inReview: Number(r.in_review),
+      approved: Number(r.approved),
       published: Number(r.published),
       rejected: Number(r.rejected),
       bottleneck: staleReview >= 1
