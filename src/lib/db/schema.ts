@@ -139,7 +139,7 @@ export const contents = pgTable("contents", {
     .references(() => artDirections.id, { onDelete: "set null" }),
   type: text("type", { enum: ["text", "image", "video"] }).notNull().default("text"),
   status: text("status", {
-    enum: ["draft", "review", "approved", "published", "generating"],
+    enum: ["draft", "review", "approved", "published", "generating", "rejected"],
   }).notNull().default("draft"),
   body: text("body").notNull().default(""),
   assetId: uuid("asset_id"),

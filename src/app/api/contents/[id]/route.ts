@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireWorkspace, TenantError } from "@/lib/tenant";
 import { getContent, applyContentUpdate, setContentStatus } from "@/lib/contents";
 
-const STATUSES = ["draft", "review", "approved", "published", "generating"] as const;
+const STATUSES = ["draft", "review", "approved", "published", "generating", "rejected"] as const;
 
 export async function GET(
   req: NextRequest, { params }: { params: Promise<{ id: string }> }

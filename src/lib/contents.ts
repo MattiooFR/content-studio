@@ -120,7 +120,7 @@ export async function resolveProposed(p: {
 
 export async function setContentStatus(
   workspaceId: string, contentId: string,
-  status: "draft" | "review" | "approved" | "published" | "generating"
+  status: "draft" | "review" | "approved" | "published" | "generating" | "rejected"
 ) {
   const [row] = await db.update(contents).set({ status, updatedAt: new Date() })
     .where(and(eq(contents.id, contentId), eq(contents.workspaceId, workspaceId)))

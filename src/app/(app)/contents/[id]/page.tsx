@@ -227,6 +227,14 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
               </button>
             ))}
           </div>
+          <button onClick={() => setStatus("rejected")}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium tracking-wider uppercase transition-colors duration-150 ${
+              content.status === "rejected"
+                ? "border-danger/30 bg-danger/10 text-danger"
+                : "border-line bg-raised text-muted hover:border-danger/30 hover:text-danger"
+            }`}>
+            Rejeter
+          </button>
           <ExportButton body={content.body}
             format={content.channel.constraints.export_format ?? "markdown"} />
         </div>
