@@ -161,6 +161,25 @@ export const contentRevisions = pgTable("content_revisions", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [index("revisions_content").on(t.contentId)]);
 
+export const sources = pgTable("sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  ideaId: uuid("idea_id").notNull()
+    .references(() => ideas.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: ["url", "pdf", "audio", "video", "text"] }).notNull(),
+  ref: text("ref").notNull(),
+  title: text("title").notNull().default(""),
+  rawExcerpt: text("raw_excerpt").notNull().default(""),
+  extractedText: text("extracted_text").notNull().default(""),
+  extractedMeta: jsonb("extracted_meta").notNull().default({}),
+  status: text("status", { enum: ["pending", "extracted", "failed"] })
+    .notNull().default("pending"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [index("sources_ws").on(t.workspaceId), index("sources_idea").on(t.ideaId)]);
+
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull()
