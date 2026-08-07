@@ -197,7 +197,7 @@ export const sources = pgTable("sources", {
 
 **Interfaces:** consumes W1 + `GET /api/stats/funnel`.
 
-- [ ] SectionCard « Pipeline » en tête d'inbox : une `FunnelLine` par canal — nom du canal, puis `12 idées → 8 drafts → 3 review → 5 publiés · 2 rejetés` en `tabular-nums` (segments muted, published en success, rejected en danger, séparateur ·) ; dessous, 12px : `✓ aucun goulot` (success) ou le message de goulot (warning). Skeleton pendant le fetch, res.ok. Build + suite stable + commit `feat(funnel): la ligne de pipeline par canal dans l'inbox`.
+- [ ] SectionCard « Pipeline » en tête d'inbox : une `FunnelLine` par canal — nom du canal, puis `12 idées → 8 drafts → 3 review → 1 approuvé → 5 publiés · 2 rejetés` en `tabular-nums` (segments muted, published en success, rejected en danger, séparateur ·) ; dessous, 12px : `✓ aucun goulot` (success) ou le message de goulot (warning). Skeleton pendant le fetch, res.ok. Build + suite stable + commit `feat(funnel): la ligne de pipeline par canal dans l'inbox`.
 
 ---
 
