@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# artefacts locaux (SDD, refs design) — jamais dans le repo
+.superpowers/
