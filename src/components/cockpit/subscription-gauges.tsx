@@ -10,7 +10,9 @@ type GaugeSourceRow = {
   name: string;
   kind: "quota" | "cost";
   enabled: boolean;
-  lastPayload: GaugePayload;
+  // jsonb NOT NULL en base, mais ça n'empêche pas la valeur JSON `null` —
+  // type honnête pour que tout accès direct (sans `?.`) soit une erreur TS.
+  lastPayload: GaugePayload | null;
   lastError: string | null;
 };
 
@@ -124,7 +126,10 @@ export function SubscriptionGauges() {
           if (s.lastError) {
             return <ErrorGauge key={s.id} label={s.name} error={s.lastError} />;
           }
-          const accounts = s.lastPayload.accounts ?? [];
+          // lastPayload est une colonne jsonb NOT NULL, mais ça n'empêche pas
+          // la valeur JSON littérale `null` (update manuel en DB self-host) —
+          // chaînage optionnel avant `?? []`, jamais un accès direct.
+          const accounts = s.lastPayload?.accounts ?? [];
           if (accounts.length === 0) return null; // pas encore de données exploitables
           const segments: GaugeSegment[] = accounts.map((a) => ({
             id: a.id,

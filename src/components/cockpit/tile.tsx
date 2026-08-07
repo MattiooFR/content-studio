@@ -36,7 +36,7 @@ export function Tile({
   if (compact) {
     return (
       <div className={cn("flex min-w-0 items-center gap-2", className)}>
-        <span className="shrink-0 text-[10px] font-medium tracking-widest text-muted uppercase">
+        <span className="shrink-0 text-[11px] font-medium tracking-widest text-muted uppercase">
           {label}
         </span>
         <span className={cn("shrink-0 text-base font-semibold tabular-nums", TONE_TEXT[tone])}>

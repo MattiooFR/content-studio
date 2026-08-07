@@ -310,7 +310,10 @@ export async function getGaugesState(
   const totalCostEur = sources
     .filter((s) => s.enabled && s.kind === "cost")
     .reduce((sum, s) => {
-      const payload = s.lastPayload as GaugePayload;
+      // jsonb NOT NULL n'empêche pas la valeur JSON littérale `null` (un
+      // update manuel en DB self-host peut la poser) — `?? {}` avant le cast
+      // pour ne jamais déréférencer `null`.
+      const payload = (s.lastPayload ?? {}) as GaugePayload;
       return typeof payload.costMonthlyEur === "number" ? sum + payload.costMonthlyEur : sum;
     }, 0);
 
