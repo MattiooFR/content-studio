@@ -19,6 +19,8 @@ export async function listIdeas(workspaceId: string, status?: string) {
       // émet "id" non qualifié, que Postgres lie à contents.id (portée la plus
       // proche) → compte toujours 0.
       contentsCount: sql<number>`(select count(*)::int from contents c where c.idea_id = ideas.id)`,
+      // même pattern, même piège : `s.idea_id = ideas.id` qualifié à la main.
+      sourcesCount: sql<number>`(select count(*)::int from sources s where s.idea_id = ideas.id)`,
     })
     .from(ideas)
     .where(where)
