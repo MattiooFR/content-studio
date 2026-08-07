@@ -8,17 +8,21 @@ type GaugeKind = "quota" | "cost";
 // ---- contrat de payload (documenté au brief) ----------------------------
 // { accounts?: [{id, usedPercent?, resetAt?, available?}], costMonthlyEur? }
 // Champs inconnus IGNORÉS (comportement par défaut de z.object : les clés non
-// déclarées sont retirées, pas rejetées) ; un type faux sur un champ déclaré
-// → échec de parsing → error, jamais de throw vers l'appelant.
+// déclarées sont retirées, pas rejetées) ; un type faux OU hors bornes sur un
+// champ déclaré → échec de parsing → error, jamais de throw vers l'appelant.
+// Bornes (durcissement DoS) : accounts plafonné à 50 entrées, id/resetAt à
+// 200 caractères, usedPercent dans [0,100] — une valeur hors bornes est un
+// payload CASSÉ (error), jamais clampée en silence : l'UI ne doit recevoir
+// que du propre.
 const gaugeAccountSchema = z.object({
-  id: z.string(),
-  usedPercent: z.number().nullable().optional(),
-  resetAt: z.string().nullable().optional(),
+  id: z.string().max(200),
+  usedPercent: z.number().min(0).max(100).nullable().optional(),
+  resetAt: z.string().max(200).nullable().optional(),
   available: z.boolean().optional(),
 });
 
 const gaugePayloadSchema = z.object({
-  accounts: z.array(gaugeAccountSchema).optional(),
+  accounts: z.array(gaugeAccountSchema).max(50).optional(),
   costMonthlyEur: z.number().optional(),
 });
 
@@ -27,6 +31,33 @@ export type GaugePayload = z.infer<typeof gaugePayloadSchema>;
 
 const FETCH_TIMEOUT_MS = 4000;
 const CACHE_TTL_MS = 5 * 60 * 1000;
+// Un payload de jauge est minuscule (quelques comptes + un nombre) : au-delà
+// de 1 MiB, c'est hostile ou cassé. Lu par un reader manuel plafonné plutôt
+// que `res.json()`/`res.text()`, qui bufferisent SANS borne — un bridge
+// hostile (ou juste buggé) pourrait sinon gonfler la mémoire du serveur.
+const MAX_BODY_BYTES = 1024 * 1024;
+
+async function readBodyCapped(res: Response): Promise<{ text: string } | { error: string }> {
+  if (!res.body) {
+    // Pas de flux exposé (environnement inhabituel) : repli défensif, non
+    // emprunté par fetch() Node/undici en pratique.
+    return { text: await res.text() };
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      return { error: "réponse trop grosse (> 1 MiB)" };
+    }
+    chunks.push(value);
+  }
+  return { text: Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8") };
+}
 
 /**
  * Interroge UNE source. Ne throw JAMAIS vers l'appelant : toute défaillance
@@ -44,13 +75,25 @@ export async function fetchGaugeSource(
     const res = await fetch(source.url, {
       headers: source.headers,
       signal: controller.signal,
+      // Jamais de redirection suivie : un endpoint approuvé à la création
+      // pourrait plus tard répondre par un 302 vers une IP interne, en
+      // embarquant le header custom (x-api-key) vers la cible redirigée.
+      // Un bridge légitime n'a aucune raison de rediriger.
+      redirect: "manual",
     });
+    if (res.status >= 300 && res.status < 400) {
+      return { error: "redirection refusée (3xx)" };
+    }
     if (!res.ok) {
       return { error: `HTTP ${res.status}` };
     }
+
+    const body = await readBodyCapped(res);
+    if ("error" in body) return body;
+
     let json: unknown;
     try {
-      json = await res.json();
+      json = JSON.parse(body.text);
     } catch {
       return { error: "réponse non-JSON" };
     }
@@ -77,17 +120,32 @@ export async function fetchGaugeSource(
 // locaux de l'utilisateur SONT le cas d'usage : localhost et 127.0.0.1 sont
 // donc explicitement autorisés, alors que le reste de la plage 127.0.0.0/8
 // (souvent utilisée pour désigner d'autres process locaux qu'on ne veut pas
-// exposer par erreur) reste refusé, comme 10.*, 192.168.* et 169.254.*.
+// exposer par erreur) reste refusé, comme 10.*, 192.168.*, 169.254.* et
+// 0.0.0.0. IPv6 littéral : bloqué EN BLOC sauf `[::1]` (même logique que
+// 127.0.0.1) — pas de parsing fin des plages ULA/link-local, un refus large
+// coûte trois lignes et rien de légitime ne perd au change en self-host.
 function isDisallowedPrivateLiteralIp(hostname: string): boolean {
-  if (hostname === "localhost" || hostname === "127.0.0.1") return false;
-  if (/^127\./.test(hostname)) return true;
-  if (/^10\./.test(hostname)) return true;
-  if (/^192\.168\./.test(hostname)) return true;
-  if (/^169\.254\./.test(hostname)) return true;
+  const host = hostname.toLowerCase();
+
+  if (host.startsWith("[") && host.endsWith("]")) {
+    return host !== "[::1]";
+  }
+
+  if (host === "localhost" || host === "127.0.0.1") return false;
+  if (host === "0.0.0.0") return true;
+  if (/^127\./.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^169\.254\./.test(host)) return true;
   return false;
 }
 
+const MAX_URL_LENGTH = 500;
+
 function validateUrl(url: string): string {
+  if (url.length > MAX_URL_LENGTH) {
+    throw new Error(`url trop longue (max ${MAX_URL_LENGTH} caractères)`);
+  }
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -99,7 +157,7 @@ function validateUrl(url: string): string {
   }
   if (isDisallowedPrivateLiteralIp(parsed.hostname)) {
     throw new Error(
-      "URL refusée : IP privée non autorisée (seuls localhost/127.0.0.1 sont permis en self-host)"
+      "URL refusée : IP privée non autorisée (seuls localhost/127.0.0.1/[::1] sont permis en self-host)"
     );
   }
   return url;
@@ -111,20 +169,36 @@ function validateUrl(url: string): string {
 // sans HSM/KMS ne protège de rien de plus qu'un accès direct à la db, déjà
 // nécessaire pour lire le reste du workspace). À revoir si/quand une offre
 // SaaS multi-tenant est envisagée.
+// Bornes (durcissement DoS, cf. name/url ci-dessus) : 20 headers maximum,
+// valeurs de 500 caractères maximum.
+const MAX_HEADER_COUNT = 20;
+const MAX_HEADER_VALUE_LENGTH = 500;
+
 function validateHeaders(headers: unknown): Record<string, string> {
   if (headers === undefined) return {};
   if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
     throw new Error("headers invalide : objet de chaînes attendu");
   }
+  const entries = Object.entries(headers);
+  if (entries.length > MAX_HEADER_COUNT) {
+    throw new Error(`headers invalide : ${MAX_HEADER_COUNT} maximum`);
+  }
   const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
+  for (const [key, value] of entries) {
     if (typeof value !== "string") {
       throw new Error(`headers invalide : la valeur de "${key}" doit être une chaîne`);
+    }
+    if (value.length > MAX_HEADER_VALUE_LENGTH) {
+      throw new Error(
+        `headers invalide : la valeur de "${key}" dépasse ${MAX_HEADER_VALUE_LENGTH} caractères`
+      );
     }
     result[key] = value;
   }
   return result;
 }
+
+const MAX_NAME_LENGTH = 100;
 
 type CreateGaugeSourceInput = {
   name: string;
@@ -135,6 +209,9 @@ type CreateGaugeSourceInput = {
 
 export async function createGaugeSource(workspaceId: string, input: CreateGaugeSourceInput) {
   if (!input.name?.trim()) throw new Error("name requis");
+  if (input.name.length > MAX_NAME_LENGTH) {
+    throw new Error(`name trop long (max ${MAX_NAME_LENGTH} caractères)`);
+  }
   if (input.kind !== "quota" && input.kind !== "cost") {
     throw new Error("kind invalide (quota|cost attendu)");
   }

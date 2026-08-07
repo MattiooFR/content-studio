@@ -158,6 +158,54 @@ describe("fetchGaugeSource — contrat de payload", () => {
 
     expect(result).toEqual({ payload: { costMonthlyEur: 42 } });
   });
+
+  it("redirection (3xx) refusée : jamais suivie, la cible ne reçoit AUCUNE requête", async () => {
+    const target = await startServer(jsonHandler({ costMonthlyEur: 999 }));
+    const redirector = await startServer((req, res) => {
+      res.writeHead(302, { Location: target.url });
+      res.end();
+    });
+
+    const result = await fetchGaugeSource({
+      url: redirector.url,
+      headers: { "x-api-key": "secret-123" },
+    });
+    await Promise.all([redirector.close(), target.close()]);
+
+    expect("error" in result).toBe(true);
+    // la cible redirigée n'a JAMAIS reçu la requête — ni le header custom avec elle.
+    expect(target.hits()).toBe(0);
+  });
+
+  it("réponse > 1 MiB → error sans throw, jamais bufferisée en entier", async () => {
+    const srv = await startServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      // 2 MiB de padding dans une string JSON valide autrement.
+      res.end(JSON.stringify({ costMonthlyEur: 1, padding: "x".repeat(2 * 1024 * 1024) }));
+    });
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toMatch(/grosse/i);
+  });
+
+  it("usedPercent hors [0,100] (250) → error, jamais de clamp silencieux", async () => {
+    const srv = await startServer(jsonHandler({ accounts: [{ id: "c1", usedPercent: 250 }] }));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+  });
+
+  it("accounts au-delà de 50 entrées → error", async () => {
+    const accounts = Array.from({ length: 51 }, (_, i) => ({ id: `c${i}`, usedPercent: 1 }));
+    const srv = await startServer(jsonHandler({ accounts }));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+  });
 });
 
 describe("createGaugeSource — validation + SSRF", () => {
@@ -214,12 +262,66 @@ describe("createGaugeSource — validation + SSRF", () => {
     expect(b.url).toBe("http://localhost:4000/health");
   });
 
+  it("IPv6 littéral refusé, SAUF [::1] (même logique que 127.0.0.1)", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x", url: "http://[::1]/health", kind: "quota" })
+    ).resolves.toBeTruthy();
+    for (const bad of ["http://[fe80::1]/health", "http://[fc00::1]/health", "http://[::ffff:10.0.0.5]/health"]) {
+      await expect(
+        createGaugeSource(ws.workspaceId, { name: "x", url: bad, kind: "quota" })
+      ).rejects.toThrow(/IP privée/);
+    }
+  });
+
+  it("0.0.0.0 refusé", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x", url: "http://0.0.0.0/health", kind: "quota" })
+    ).rejects.toThrow(/IP privée/);
+  });
+
   it("headers avec valeur non-string → rejetés", async () => {
     const ws = await signUpTestUser();
     await expect(
       createGaugeSource(ws.workspaceId, {
         name: "x", url: "https://example.com", kind: "quota",
         headers: { count: 3 } as unknown as Record<string, string>,
+      })
+    ).rejects.toThrow(/headers/);
+  });
+
+  it("name trop long (> 100) → rejeté", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x".repeat(101), url: "https://example.com", kind: "quota" })
+    ).rejects.toThrow(/name/);
+  });
+
+  it("url trop longue (> 500) → rejetée", async () => {
+    const ws = await signUpTestUser();
+    const longUrl = `https://example.com/${"a".repeat(500)}`;
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x", url: longUrl, kind: "quota" })
+    ).rejects.toThrow(/url/i);
+  });
+
+  it("plus de 20 headers → rejeté", async () => {
+    const ws = await signUpTestUser();
+    const headers = Object.fromEntries(
+      Array.from({ length: 21 }, (_, i) => [`h${i}`, "v"])
+    );
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x", url: "https://example.com", kind: "quota", headers })
+    ).rejects.toThrow(/headers/);
+  });
+
+  it("valeur de header trop longue (> 500) → rejetée", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, {
+        name: "x", url: "https://example.com", kind: "quota",
+        headers: { "x-api-key": "a".repeat(501) },
       })
     ).rejects.toThrow(/headers/);
   });
