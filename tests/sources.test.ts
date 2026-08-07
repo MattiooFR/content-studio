@@ -67,6 +67,23 @@ describe("sources — cycle pending → extracted", () => {
       addSource(ws.workspaceId, { ideaId: idea.id, kind: "video" as never, ref: "storage-key" })
     ).rejects.toThrow("kind non disponible en v1");
   });
+
+  it("kind url : schéma javascript: refusé", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+    await expect(
+      addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "javascript:alert(1)" })
+    ).rejects.toThrow(/URL invalide/);
+  });
+
+  it("kind url : schéma https accepté", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+    const source = await addSource(ws.workspaceId, {
+      ideaId: idea.id, kind: "url", ref: "https://exemple.fr/page",
+    });
+    expect(source.ref).toBe("https://exemple.fr/page");
+  });
 });
 
 describe("sources — cloisonnement workspace", () => {

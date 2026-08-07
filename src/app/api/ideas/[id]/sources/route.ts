@@ -37,6 +37,8 @@ export async function POST(
       return NextResponse.json({ error: e.message }, { status: 404 });
     if (e instanceof Error && e.message.includes("non disponible"))
       return NextResponse.json({ error: e.message }, { status: 400 });
+    if (e instanceof Error && e.message.includes("URL invalide"))
+      return NextResponse.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }

@@ -19,6 +19,21 @@ export async function addSource(workspaceId: string, input: AddSourceInput) {
   if (!AVAILABLE_KINDS_V1.includes(input.kind)) {
     throw new Error("kind non disponible en v1");
   }
+  // kind "url" : schéma validé ICI, au niveau lib — couvre UI + MCP + le futur
+  // /api/clip (W4) d'un coup, une seule règle. Sans ça, `javascript:`/`data:`
+  // seraient stockés tels quels : pas de XSS aujourd'hui (jamais rendu en
+  // href), mais différée dès qu'un écran ouvre la source.
+  if (input.kind === "url") {
+    let parsed: URL;
+    try {
+      parsed = new URL(input.ref);
+    } catch {
+      throw new Error("URL invalide (http/https attendu)");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("URL invalide (http/https attendu)");
+    }
+  }
   const [idea] = await db.select().from(ideas)
     .where(and(eq(ideas.id, input.ideaId), eq(ideas.workspaceId, workspaceId)));
   if (!idea) throw new Error("idée introuvable dans ce workspace");
