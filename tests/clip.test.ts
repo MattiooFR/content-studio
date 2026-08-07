@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
-import { POST } from "@/app/api/clip/route";
+import { POST, OPTIONS } from "@/app/api/clip/route";
 import { signUpTestUser } from "./helpers";
 import { generateMcpToken } from "@/lib/tenant";
 import { getIdea } from "@/lib/ideas";
@@ -223,6 +223,54 @@ describe("POST /api/clip", () => {
       // Pas d'idée, pas de source créées.
       // On ne peut pas vérifier direc qu'il n'y a rien, mais la cohérence
       // est garantie par la transaction.
+    });
+  });
+
+  // CORS (W5) : l'extension Chrome demande une optional_host_permission au
+  // moment de la config (bypass CORS natif, pas de header nécessaire), mais
+  // ce handler sert de filet de secours. Restreint à chrome-extension://.
+  describe("CORS extension", () => {
+    it("OPTIONS depuis chrome-extension:// → 204 + headers reflétant l'origine", async () => {
+      const req = new NextRequest("http://localhost:3003/api/clip", {
+        method: "OPTIONS",
+        headers: { origin: "chrome-extension://abcdefabcdefabcdefabcdefabcdefab" },
+      });
+      const res = await OPTIONS(req);
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-allow-origin")).toBe(
+        "chrome-extension://abcdefabcdefabcdefabcdefabcdefab"
+      );
+      expect(res.headers.get("access-control-allow-methods")).toMatch(/POST/);
+    });
+
+    it("OPTIONS depuis une origine web classique → pas de header CORS (pas d'ouverture large)", async () => {
+      const req = new NextRequest("http://localhost:3003/api/clip", {
+        method: "OPTIONS",
+        headers: { origin: "https://evil.example" },
+      });
+      const res = await OPTIONS(req);
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    });
+
+    it("POST depuis chrome-extension:// → réponse porte Access-Control-Allow-Origin", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+
+      const req = new NextRequest("http://localhost:3003/api/clip", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          origin: "chrome-extension://abcdefabcdefabcdefabcdefabcdefab",
+        },
+        body: JSON.stringify({ url: "https://example.com" }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("access-control-allow-origin")).toBe(
+        "chrome-extension://abcdefabcdefabcdefabcdefabcdefab"
+      );
     });
   });
 });

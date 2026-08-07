@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "content-studio — clipper",
+  "version": "1.0.0",
+  "description": "Envoie une page ou une sélection de texte vers l'inbox content-studio en un clic.",
+  "icons": {
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "128": "icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"]
+}

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>content-studio · clipper</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    width: 320px;
+    background: #131317;
+    color: #e8e8ec;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  .wrap {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  h1 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #8b8b95;
+    margin: 0;
+    font-weight: 600;
+  }
+  fieldset {
+    border: 1px solid #26262e;
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+  }
+  legend {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8b8b95;
+    padding: 0 4px;
+  }
+  label {
+    font-size: 11px;
+    color: #8b8b95;
+  }
+  input {
+    width: 100%;
+    background: #1b1b21;
+    border: 1px solid #26262e;
+    border-radius: 6px;
+    color: #e8e8ec;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  input:focus {
+    outline: 1px solid #ff4d36;
+    border-color: #ff4d36;
+  }
+  button {
+    border: none;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-save {
+    background: #1b1b21;
+    color: #e8e8ec;
+    border: 1px solid #26262e;
+  }
+  .btn-save:hover { border-color: #34343e; }
+  .btn-clip {
+    background: #ff4d36;
+    color: #ffffff;
+  }
+  .btn-clip:hover { background: #e8442f; }
+  .btn-clip:disabled { opacity: 0.5; cursor: default; }
+  .status {
+    font-size: 12px;
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: none;
+    line-height: 1.4;
+  }
+  .status.show { display: block; }
+  .status.ok { background: #3dd68c26; color: #3dd68c; }
+  .status.err { background: #ff5d5d26; color: #ff5d5d; }
+  .status a { color: inherit; text-decoration: underline; }
+  .hint {
+    font-size: 11px;
+    color: #55555e;
+    margin: 0;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>content-studio · clipper</h1>
+
+    <fieldset>
+      <legend>Instance</legend>
+      <label for="instanceUrl">URL de l'instance</label>
+      <input id="instanceUrl" type="text" placeholder="http://localhost:3003" autocomplete="off" spellcheck="false" />
+      <label for="token">Token MCP</label>
+      <input id="token" type="text" placeholder="cs_…" autocomplete="off" spellcheck="false" />
+      <button id="save" class="btn-save" type="button">Enregistrer</button>
+    </fieldset>
+
+    <button id="clip" class="btn-clip" type="button">Clipper cette page</button>
+
+    <div id="status" class="status"></div>
+    <p class="hint">La sélection de texte de l'onglet (si présente) est envoyée avec la page.</p>
+  </div>
+
+  <script src="clip.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
