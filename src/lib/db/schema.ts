@@ -180,6 +180,21 @@ export const sources = pgTable("sources", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [index("sources_ws").on(t.workspaceId), index("sources_idea").on(t.ideaId)]);
 
+export const gaugeSources = pgTable("gauge_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  headers: jsonb("headers").notNull().default({}),
+  kind: text("kind", { enum: ["quota", "cost"] }).notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  lastPayload: jsonb("last_payload").notNull().default({}),
+  lastFetchedAt: timestamp("last_fetched_at"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [index("gauge_sources_ws").on(t.workspaceId)]);
+
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull()

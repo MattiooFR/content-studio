@@ -15,6 +15,13 @@
       "when": 1786132288586,
       "tag": "0001_messy_photon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786138581558,
+      "tag": "0002_glorious_newton_destine",
+      "breakpoints": true
     }
   ]
 }

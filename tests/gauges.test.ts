@@ -1,0 +1,449 @@
+import { describe, it, expect } from "vitest";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { gaugeSources } from "@/lib/db/schema";
+import {
+  createGaugeSource, listGaugeSources, getGaugeSource,
+  updateGaugeSource, deleteGaugeSource,
+  fetchGaugeSource, refreshGauges, getGaugesState,
+} from "@/lib/gauges";
+import { signUpTestUser } from "./helpers";
+
+// ---- mini-serveur http éphémère (port haut aléatoire, 127.0.0.1 only) ----
+function startServer(handler: http.RequestListener) {
+  return new Promise<{ url: string; hits: () => number; close: () => Promise<void> }>((resolve) => {
+    let hitCount = 0;
+    const server = http.createServer((req, res) => {
+      hitCount += 1;
+      handler(req, res);
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        hits: () => hitCount,
+        close: () => new Promise((r) => server.close(() => r())),
+      });
+    });
+  });
+}
+
+function jsonHandler(payload: unknown, status = 200): http.RequestListener {
+  return (req, res) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(payload));
+  };
+}
+
+describe("fetchGaugeSource — contrat de payload", () => {
+  it("payload conforme multi-comptes → parsé", async () => {
+    const srv = await startServer(jsonHandler({
+      accounts: [
+        { id: "compte-1", usedPercent: 87, resetAt: "2026-09-01T00:00:00Z", available: true },
+        { id: "compte-2", usedPercent: 12, available: false },
+      ],
+      costMonthlyEur: 378,
+    }));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect(result).toEqual({
+      payload: {
+        accounts: [
+          { id: "compte-1", usedPercent: 87, resetAt: "2026-09-01T00:00:00Z", available: true },
+          { id: "compte-2", usedPercent: 12, available: false },
+        ],
+        costMonthlyEur: 378,
+      },
+    });
+  });
+
+  it("champs inconnus ignorés", async () => {
+    const srv = await startServer(jsonHandler({
+      accounts: [{ id: "c1", usedPercent: 50, weirdField: "x" }],
+      costMonthlyEur: 10,
+      unknownTopLevel: true,
+    }));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("payload" in result).toBe(true);
+    if ("payload" in result) {
+      expect(result.payload).toEqual({
+        accounts: [{ id: "c1", usedPercent: 50 }],
+        costMonthlyEur: 10,
+      });
+    }
+  });
+
+  it("accounts non tableau (malformé) → error sans throw", async () => {
+    const srv = await startServer(jsonHandler({ accounts: "nope" }));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+    expect("payload" in result).toBe(false);
+  });
+
+  it("type faux dans un compte (usedPercent string) → error sans throw", async () => {
+    const srv = await startServer(jsonHandler({
+      accounts: [{ id: "c1", usedPercent: "beaucoup" }],
+    }));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+  });
+
+  it("id manquant dans un compte → error sans throw", async () => {
+    const srv = await startServer(jsonHandler({ accounts: [{ usedPercent: 50 }] }));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+  });
+
+  it("HTTP non-2xx → error sans throw", async () => {
+    const srv = await startServer(jsonHandler({ error: "boom" }, 500));
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+  });
+
+  it("JSON invalide → error sans throw", async () => {
+    const srv = await startServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("ceci n'est pas du json");
+    });
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+  });
+
+  it("timeout : handler qui ne répond jamais → error en moins de 5 s", async () => {
+    const srv = await startServer(() => {
+      // ne répond jamais — le client doit abandonner tout seul.
+    });
+    const start = Date.now();
+    const result = await fetchGaugeSource({ url: srv.url, headers: {} });
+    const elapsed = Date.now() - start;
+    await srv.close();
+
+    expect("error" in result).toBe(true);
+    expect(elapsed).toBeLessThan(5000);
+  });
+
+  it("connexion refusée (port fermé) → error sans throw", async () => {
+    // 127.0.0.1:1 : port privilégié quasi certainement fermé, ECONNREFUSED immédiat.
+    const result = await fetchGaugeSource({ url: "http://127.0.0.1:1", headers: {} });
+    expect("error" in result).toBe(true);
+  });
+
+  it("headers custom transmis à la requête", async () => {
+    const srv = await startServer((req, res) => {
+      if (req.headers["x-api-key"] === "secret-123") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ costMonthlyEur: 42 }));
+      } else {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+      }
+    });
+    const result = await fetchGaugeSource({ url: srv.url, headers: { "x-api-key": "secret-123" } });
+    await srv.close();
+
+    expect(result).toEqual({ payload: { costMonthlyEur: 42 } });
+  });
+});
+
+describe("createGaugeSource — validation + SSRF", () => {
+  it("URL https valide + headers valides → créée, enabled par défaut", async () => {
+    const ws = await signUpTestUser();
+    const row = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge Claude", url: "https://bridge.example.com/health",
+      headers: { "x-api-key": "abc" }, kind: "quota",
+    });
+    expect(row.enabled).toBe(true);
+    expect(row.lastPayload).toEqual({});
+    expect(row.lastFetchedAt).toBeNull();
+    expect(row.lastError).toBeNull();
+    expect(row.headers).toEqual({ "x-api-key": "abc" });
+  });
+
+  it("URL sans protocole → rejetée", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x", url: "example.com", kind: "quota" })
+    ).rejects.toThrow(/URL invalide/);
+  });
+
+  it("URL javascript: → rejetée", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x", url: "javascript:alert(1)", kind: "quota" })
+    ).rejects.toThrow(/URL invalide/);
+  });
+
+  it("IP privées littérales (10.*, 192.168.*, 169.254.*, 127.* hors 127.0.0.1) → rejetées", async () => {
+    const ws = await signUpTestUser();
+    for (const bad of [
+      "http://10.0.0.5/health",
+      "http://192.168.1.1/health",
+      "http://169.254.1.1/health",
+      "http://127.0.0.2/health",
+    ]) {
+      await expect(
+        createGaugeSource(ws.workspaceId, { name: "x", url: bad, kind: "quota" })
+      ).rejects.toThrow(/IP privée/);
+    }
+  });
+
+  it("localhost et 127.0.0.1 explicitement autorisés (self-host)", async () => {
+    const ws = await signUpTestUser();
+    const a = await createGaugeSource(ws.workspaceId, {
+      name: "a", url: "http://127.0.0.1:4000/health", kind: "quota",
+    });
+    const b = await createGaugeSource(ws.workspaceId, {
+      name: "b", url: "http://localhost:4000/health", kind: "quota",
+    });
+    expect(a.url).toBe("http://127.0.0.1:4000/health");
+    expect(b.url).toBe("http://localhost:4000/health");
+  });
+
+  it("headers avec valeur non-string → rejetés", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, {
+        name: "x", url: "https://example.com", kind: "quota",
+        headers: { count: 3 } as unknown as Record<string, string>,
+      })
+    ).rejects.toThrow(/headers/);
+  });
+
+  it("name manquant → rejeté", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "", url: "https://example.com", kind: "quota" })
+    ).rejects.toThrow(/name/);
+  });
+});
+
+describe("listGaugeSources / getGaugeSource / updateGaugeSource / deleteGaugeSource — cloisonnement", () => {
+  it("une source du workspace A est invisible et non modifiable depuis B", async () => {
+    const a = await signUpTestUser();
+    const b = await signUpTestUser();
+    const source = await createGaugeSource(a.workspaceId, {
+      name: "Bridge A", url: "https://a.example.com", kind: "quota",
+    });
+
+    expect((await listGaugeSources(a.workspaceId)).map((s) => s.id)).toContain(source.id);
+    expect((await listGaugeSources(b.workspaceId)).map((s) => s.id)).not.toContain(source.id);
+    expect(await getGaugeSource(b.workspaceId, source.id)).toBeNull();
+    expect(await updateGaugeSource(b.workspaceId, source.id, { enabled: false })).toBeNull();
+    expect(await deleteGaugeSource(b.workspaceId, source.id)).toBeNull();
+
+    // toujours là, intacte, côté A
+    const stillThere = await getGaugeSource(a.workspaceId, source.id);
+    expect(stillThere?.enabled).toBe(true);
+  });
+
+  it("updateGaugeSource bascule enabled", async () => {
+    const ws = await signUpTestUser();
+    const source = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge", url: "https://example.com", kind: "quota",
+    });
+    const updated = await updateGaugeSource(ws.workspaceId, source.id, { enabled: false });
+    expect(updated?.enabled).toBe(false);
+  });
+
+  it("deleteGaugeSource supprime définitivement", async () => {
+    const ws = await signUpTestUser();
+    const source = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge", url: "https://example.com", kind: "quota",
+    });
+    const deleted = await deleteGaugeSource(ws.workspaceId, source.id);
+    expect(deleted?.id).toBe(source.id);
+    expect(await getGaugeSource(ws.workspaceId, source.id)).toBeNull();
+  });
+});
+
+describe("refreshGauges — poller", () => {
+  it("source conforme : persiste lastPayload + lastFetchedAt, lastError effacé", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({
+      accounts: [{ id: "c1", usedPercent: 42, available: true }],
+    }));
+    const source = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge", url: srv.url, kind: "quota",
+    });
+
+    await refreshGauges(ws.workspaceId);
+    await srv.close();
+
+    const [row] = await db.select().from(gaugeSources).where(eq(gaugeSources.id, source.id));
+    expect(row.lastPayload).toEqual({ accounts: [{ id: "c1", usedPercent: 42, available: true }] });
+    expect(row.lastError).toBeNull();
+    expect(row.lastFetchedAt).not.toBeNull();
+  });
+
+  it("source malformée : lastError posé, jamais de throw", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ accounts: "nope" }));
+    const source = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge cassé", url: srv.url, kind: "quota",
+    });
+
+    await expect(refreshGauges(ws.workspaceId)).resolves.not.toThrow();
+    await srv.close();
+
+    const [row] = await db.select().from(gaugeSources).where(eq(gaugeSources.id, source.id));
+    expect(row.lastError).not.toBeNull();
+  });
+
+  it("ignore les sources enabled=false", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ costMonthlyEur: 10 }));
+    const source = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge désactivé", url: srv.url, kind: "cost",
+    });
+    await updateGaugeSource(ws.workspaceId, source.id, { enabled: false });
+
+    await refreshGauges(ws.workspaceId);
+    await srv.close();
+
+    expect(srv.hits()).toBe(0);
+    const row = await getGaugeSource(ws.workspaceId, source.id);
+    expect(row?.lastFetchedAt).toBeNull();
+  });
+
+  it("plusieurs sources : l'échec de l'une ne bloque pas la mise à jour des autres", async () => {
+    const ws = await signUpTestUser();
+    const ok = await startServer(jsonHandler({ costMonthlyEur: 99 }));
+    const okSource = await createGaugeSource(ws.workspaceId, {
+      name: "OK", url: ok.url, kind: "cost",
+    });
+    const downSource = await createGaugeSource(ws.workspaceId, {
+      name: "Down", url: "http://127.0.0.1:1", kind: "cost",
+    });
+
+    await refreshGauges(ws.workspaceId);
+    await ok.close();
+
+    const rowOk = await getGaugeSource(ws.workspaceId, okSource.id);
+    const rowDown = await getGaugeSource(ws.workspaceId, downSource.id);
+    expect(rowOk?.lastPayload).toEqual({ costMonthlyEur: 99 });
+    expect(rowOk?.lastError).toBeNull();
+    expect(rowDown?.lastError).not.toBeNull();
+  });
+
+  it("cloisonnement : ne polle que les sources du workspace demandé", async () => {
+    const a = await signUpTestUser();
+    const b = await signUpTestUser();
+    const srvB = await startServer(jsonHandler({ costMonthlyEur: 1 }));
+    await createGaugeSource(b.workspaceId, { name: "B", url: srvB.url, kind: "cost" });
+
+    await refreshGauges(a.workspaceId);
+    await srvB.close();
+
+    expect(srvB.hits()).toBe(0);
+  });
+});
+
+describe("getGaugesState — cache 5 minutes + coût total", () => {
+  it("jamais fetchée (lastFetchedAt null) → refresh automatique même sans ?refresh", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ accounts: [{ id: "c1", usedPercent: 10 }] }));
+    await createGaugeSource(ws.workspaceId, { name: "Bridge", url: srv.url, kind: "quota" });
+
+    const state = await getGaugesState(ws.workspaceId, {});
+    await srv.close();
+
+    expect(srv.hits()).toBe(1);
+    expect(state.sources[0].lastPayload).toEqual({ accounts: [{ id: "c1", usedPercent: 10 }] });
+  });
+
+  it("fraîche (<5 min) sans ?refresh → état stocké, pas de nouvel appel réseau", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ costMonthlyEur: 7 }));
+    await createGaugeSource(ws.workspaceId, { name: "Bridge", url: srv.url, kind: "cost" });
+
+    await getGaugesState(ws.workspaceId, {}); // 1er appel : refresh (jamais fetchée)
+    await getGaugesState(ws.workspaceId, {}); // 2e appel : censé rester en cache
+    await srv.close();
+
+    expect(srv.hits()).toBe(1);
+  });
+
+  it("refresh=true force le refetch même si fraîche", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ costMonthlyEur: 7 }));
+    await createGaugeSource(ws.workspaceId, { name: "Bridge", url: srv.url, kind: "cost" });
+
+    await getGaugesState(ws.workspaceId, {});
+    await getGaugesState(ws.workspaceId, { refresh: true });
+    await srv.close();
+
+    expect(srv.hits()).toBe(2);
+  });
+
+  it("lastFetchedAt vieux de plus de 5 min → refresh automatique sans ?refresh", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ costMonthlyEur: 7 }));
+    const source = await createGaugeSource(ws.workspaceId, { name: "Bridge", url: srv.url, kind: "cost" });
+
+    await getGaugesState(ws.workspaceId, {}); // fetch #1, pose lastFetchedAt = now
+    await db.update(gaugeSources)
+      .set({ lastFetchedAt: new Date(Date.now() - 6 * 60 * 1000) })
+      .where(eq(gaugeSources.id, source.id));
+
+    await getGaugesState(ws.workspaceId, {}); // doit re-fetch car périmé
+    await srv.close();
+
+    expect(srv.hits()).toBe(2);
+  });
+
+  it("coût total agrégé = somme des costMonthlyEur des sources cost (les quota n'y contribuent pas)", async () => {
+    const ws = await signUpTestUser();
+    const srvCostA = await startServer(jsonHandler({ costMonthlyEur: 100 }));
+    const srvCostB = await startServer(jsonHandler({ costMonthlyEur: 250 }));
+    const srvQuota = await startServer(jsonHandler({ accounts: [{ id: "c1", usedPercent: 50 }] }));
+    await createGaugeSource(ws.workspaceId, { name: "A", url: srvCostA.url, kind: "cost" });
+    await createGaugeSource(ws.workspaceId, { name: "B", url: srvCostB.url, kind: "cost" });
+    await createGaugeSource(ws.workspaceId, { name: "Q", url: srvQuota.url, kind: "quota" });
+
+    const state = await getGaugesState(ws.workspaceId, { refresh: true });
+    await Promise.all([srvCostA.close(), srvCostB.close(), srvQuota.close()]);
+
+    expect(state.totalCostEur).toBe(350);
+  });
+
+  it("une source désactivée ne contribue plus au coût total", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ costMonthlyEur: 100 }));
+    const source = await createGaugeSource(ws.workspaceId, { name: "A", url: srv.url, kind: "cost" });
+    await getGaugesState(ws.workspaceId, { refresh: true });
+    await updateGaugeSource(ws.workspaceId, source.id, { enabled: false });
+
+    const state = await getGaugesState(ws.workspaceId, {});
+    await srv.close();
+
+    expect(state.totalCostEur).toBe(0);
+  });
+
+  it("cloisonnement : sources et coût de B n'apparaissent pas dans l'état de A", async () => {
+    const a = await signUpTestUser();
+    const b = await signUpTestUser();
+    const srvB = await startServer(jsonHandler({ costMonthlyEur: 500 }));
+    await createGaugeSource(b.workspaceId, { name: "B", url: srvB.url, kind: "cost" });
+
+    const stateA = await getGaugesState(a.workspaceId, {});
+    await srvB.close();
+
+    expect(stateA.sources).toEqual([]);
+    expect(stateA.totalCostEur).toBe(0);
+  });
+});
