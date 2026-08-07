@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionCard } from "@/components/cockpit/section-card";
 import { StatusBadge } from "@/components/cockpit/status-badge";
+import { FunnelLine } from "@/components/cockpit/funnel-line";
 
 type Idea = {
   id: string; title: string; notes: string; status: string;
@@ -47,6 +48,10 @@ export default function InboxPage() {
           tiennes et celles de ton agent via MCP.
         </p>
       </div>
+
+      <SectionCard title="Pipeline">
+        <FunnelLine />
+      </SectionCard>
 
       <SectionCard title="Nouvelle idée">
         <form onSubmit={create} className="space-y-3">
