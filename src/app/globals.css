@@ -128,3 +128,45 @@
     @apply font-sans;
   }
 }
+/* Rendu de l'éditeur : sans ces règles, tiptap parse bien le markdown (h2, h3,
+   listes) mais Tailwind Preflight remet titres et paragraphes à la même taille,
+   et un post long devient un mur de texte illisible à la relecture. */
+@layer components {
+  .ProseMirror {
+    line-height: 1.6;
+  }
+  .ProseMirror > * + * {
+    margin-top: 0.75rem;
+  }
+  .ProseMirror h1 { font-size: 1.5rem; font-weight: 700; margin-top: 1.75rem; }
+  .ProseMirror h2 { font-size: 1.25rem; font-weight: 700; margin-top: 1.5rem; }
+  .ProseMirror h3 { font-size: 1.05rem; font-weight: 600; margin-top: 1.25rem; }
+  .ProseMirror ul { list-style: disc; padding-left: 1.5rem; }
+  .ProseMirror ol { list-style: decimal; padding-left: 1.5rem; }
+  .ProseMirror li { margin-top: 0.25rem; }
+  .ProseMirror code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+    background: color-mix(in oklch, currentColor 8%, transparent);
+    padding: 0.1em 0.35em;
+    border-radius: 0.25rem;
+  }
+  .ProseMirror pre {
+    background: color-mix(in oklch, currentColor 6%, transparent);
+    padding: 0.85rem 1rem;
+    border-radius: 0.5rem;
+    overflow-x: auto;
+  }
+  .ProseMirror pre code { background: none; padding: 0; }
+  .ProseMirror blockquote {
+    border-left: 3px solid color-mix(in oklch, currentColor 20%, transparent);
+    padding-left: 0.9rem;
+    opacity: 0.85;
+  }
+  .ProseMirror table { width: 100%; border-collapse: collapse; }
+  .ProseMirror th, .ProseMirror td {
+    border: 1px solid color-mix(in oklch, currentColor 15%, transparent);
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+  }
+}
