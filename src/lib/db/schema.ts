@@ -195,6 +195,45 @@ export const gaugeSources = pgTable("gauge_sources", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [index("gauge_sources_ws").on(t.workspaceId)]);
 
+// ---- lanes de chat (Task W10) --------------------------------------------
+// Une lane = un onglet de conversation avec le CLI agent LOCAL de
+// l'utilisateur (son abonnement, jamais un appel de modèle fait par
+// l'outil). cliSessionId permet la reprise (`--resume`) d'une conversation
+// déjà entamée côté CLI.
+export const chatLanes = pgTable("chat_lanes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default("Conversation"),
+  cliSessionId: text("cli_session_id"),
+  status: text("status", { enum: ["idle", "running", "error"] })
+    .notNull().default("idle"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [index("chat_lanes_ws").on(t.workspaceId)]);
+
+// Pas de workspace_id ici (même pattern que content_revisions) : le
+// cloisonnement passe par la lane parente (chat_lanes.workspace_id),
+// jamais vérifié directement sur cette table — toute lib qui la lit DOIT
+// d'abord charger la lane scopée au workspace.
+export const chatMessages = pgTable("chat_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  laneId: uuid("lane_id").notNull()
+    .references(() => chatLanes.id, { onDelete: "cascade" }),
+  role: text("role", { enum: ["user", "agent", "system"] }).notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [index("chat_messages_lane").on(t.laneId)]);
+
+// Réglages par workspace pour les lanes. laneCommand est TOUJOURS
+// configurable ici, jamais en dur dans le code : c'est la commande CLI de
+// l'utilisateur (son abonnement), le serveur ne fait qu'orchestrer.
+export const workspaceSettings = pgTable("workspace_settings", {
+  workspaceId: uuid("workspace_id").primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  laneCommand: text("lane_command").notNull()
+    .default("claude -p --output-format stream-json --verbose"),
+});
+
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull()
