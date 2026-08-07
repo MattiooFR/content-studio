@@ -82,7 +82,7 @@ describe("computeFunnel — agrégat par canal", () => {
       approved: 0,
       published: 1,
       rejected: 1,
-      bottleneck: "1 contenus en review depuis plus de 7 jours",
+      bottleneck: "1 contenus en review sans activité depuis plus de 7 jours",
     });
 
     expect(seo).toEqual({
@@ -114,6 +114,6 @@ describe("computeFunnel — agrégat par canal", () => {
     const communityB = funnelB.find((r) => r.channelKey === "community");
     expect(communityB?.ideas).toBe(1);
     expect(communityB?.inReview).toBe(1);
-    expect(communityB?.bottleneck).toBe("1 contenus en review depuis plus de 7 jours");
+    expect(communityB?.bottleneck).toBe("1 contenus en review sans activité depuis plus de 7 jours");
   });
 });

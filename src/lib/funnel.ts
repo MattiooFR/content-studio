@@ -53,6 +53,15 @@ export async function computeFunnel(workspaceId: string): Promise<FunnelRow[]> {
       count(*) filter (where ct.status = 'approved')::int as approved,
       count(*) filter (where ct.status = 'published')::int as published,
       count(*) filter (where ct.status = 'rejected')::int as rejected,
+      -- Proxy de goulot, PAS le temps réel passé en review : updated_at est
+      -- la dernière écriture sur le contenu (autosave, résolution de
+      -- proposed, changement de statut...), pas un horodatage de passage en
+      -- review, il n'existe pas de colonne status_changed_at. Choix assumé :
+      -- un review activement retouché n'est pas considéré coincé, même après
+      -- des semaines dans ce statut ; seul un review SANS activité depuis
+      -- 7 jours déclenche l'alerte. Si on veut un jour le temps-en-statut
+      -- réel, il faudra ajouter cette colonne, ne pas la simuler avec
+      -- updated_at.
       count(*) filter (
         where ct.status = 'review' and ct.updated_at < now() - interval '7 days'
       )::int as stale_review
@@ -76,7 +85,7 @@ export async function computeFunnel(workspaceId: string): Promise<FunnelRow[]> {
       published: Number(r.published),
       rejected: Number(r.rejected),
       bottleneck: staleReview >= 1
-        ? `${staleReview} contenus en review depuis plus de 7 jours`
+        ? `${staleReview} contenus en review sans activité depuis plus de 7 jours`
         : null,
     };
   });
