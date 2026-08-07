@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { NavLinks } from "@/components/nav-links";
 import { SignOutButton } from "@/components/sign-out-button";
+import { SubscriptionGauges } from "@/components/cockpit/subscription-gauges";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -10,18 +11,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-40 border-b border-line bg-bg/90 backdrop-blur">
-        <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-6 px-6">
+        <div className="mx-auto flex min-h-14 w-full max-w-6xl items-center gap-6 px-6">
           <a href="/" className="flex shrink-0 items-center gap-2">
             <span className="size-2 rounded-full bg-accent" aria-hidden />
             <span className="text-sm font-semibold tracking-tight text-ink">
               content-studio
             </span>
           </a>
-          {/* Zone jauges : W9 y monte ses <GaugeBar /> par composition. */}
-          <div
-            id="header-gauges"
-            className="hidden min-w-0 flex-1 items-center gap-6 md:flex"
-          />
+          <SubscriptionGauges />
           <div className="ml-auto flex shrink-0 items-center gap-4 md:ml-0">
             <NavLinks />
             <div className="flex items-center gap-2 border-l border-line pl-4">

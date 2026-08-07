@@ -40,7 +40,10 @@ export function GaugeBar({
 
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
-      <span className="shrink-0 text-[10px] font-medium tracking-widest text-muted uppercase">
+      <span
+        title={label}
+        className="max-w-24 shrink-0 truncate text-[10px] font-medium tracking-widest text-muted uppercase"
+      >
         {label}
       </span>
       <div className="flex h-1 min-w-16 flex-1 gap-px">

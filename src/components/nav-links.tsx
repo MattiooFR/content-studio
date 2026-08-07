@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/", label: "Idées" },
+  { href: "/settings/gauges", label: "Jauges" },
   { href: "/settings/tokens", label: "Tokens MCP" },
 ];
 

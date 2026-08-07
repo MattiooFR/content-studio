@@ -27,6 +27,12 @@ const VALUE_TONE: Record<string, Tone> = {
   current: "success",
   proposed: "warning",
   superseded: "muted",
+  // jauges (sources de config)
+  quota: "muted",
+  cost: "muted",
+  enabled: "success",
+  disabled: "muted",
+  error: "danger",
 };
 
 const TONE_CLASS: Record<Tone, string> = {
@@ -42,7 +48,7 @@ export function StatusBadge({
   value,
   className,
 }: {
-  kind: "idea" | "content" | "source";
+  kind: "idea" | "content" | "source" | "gauge";
   value: string;
   className?: string;
 }) {
