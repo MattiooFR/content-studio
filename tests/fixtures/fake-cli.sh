@@ -25,11 +25,28 @@
 #                            libération du verrou).
 #   FAKE_CLI_BIG_OUTPUT=1  → émet un unique chunk de ~3 MiB (teste le cap
 #                            stdout du runner, qui doit couper avant la fin).
+#   FAKE_CLI_FLOOD=1       → ignore SIGTERM (trap) et crache des chunks de
+#                            64 Kio en boucle indéfiniment après l'init.
+#                            Ne meurt QUE sur SIGKILL, après killGraceMs —
+#                            simule un process qui "tarde à mourir". Teste
+#                            que la lecture stdout du runner s'arrête bien
+#                            AU CAP (pas juste qu'un kill est demandé) :
+#                            sans ça, ce script inonderait le buffer du
+#                            runner pendant toute la fenêtre de grâce.
 
 if [ "${FAKE_CLI_HANG:-}" = "1" ]; then
   printf '{"type":"system","subtype":"init","session_id":"fake-session-hang"}\n'
   sleep 600
   exit 0
+fi
+
+if [ "${FAKE_CLI_FLOOD:-}" = "1" ]; then
+  trap '' TERM
+  printf '{"type":"system","subtype":"init","session_id":"fake-session-flood"}\n'
+  chunk=$(head -c 65536 /dev/zero | tr '\0' 'b')
+  while true; do
+    printf '%s' "$chunk"
+  done
 fi
 
 if [ "${FAKE_CLI_FAIL:-}" = "1" ]; then

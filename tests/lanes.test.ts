@@ -18,6 +18,7 @@ const FAKE_CLI = path.join(process.cwd(), "tests/fixtures/fake-cli.sh");
 const FAKE_CLI_FAIL = `FAKE_CLI_FAIL=1 ${FAKE_CLI}`;
 const FAKE_CLI_HANG = `FAKE_CLI_HANG=1 ${FAKE_CLI}`;
 const FAKE_CLI_BIG_OUTPUT = `FAKE_CLI_BIG_OUTPUT=1 ${FAKE_CLI}`;
+const FAKE_CLI_FLOOD = `FAKE_CLI_FLOOD=1 ${FAKE_CLI}`;
 
 async function fixture(command = FAKE_CLI) {
   const ws = await signUpTestUser();
@@ -280,6 +281,57 @@ describe("runLaneMessage — FAKE_CLI_BIG_OUTPUT : cap stdout anti-DoS", () => {
     const messages = await getLaneMessages(f.workspaceId, f.lane.id);
     expect(messages!.map((m) => m.role)).toEqual(["user", "system"]);
     expect(messages![1].body).toMatch(/volumineuse/);
+
+    const lane = await getLane(f.workspaceId, f.lane.id);
+    expect(lane?.status).toBe("error");
+    expect(isLaneBusy(f.lane.id)).toBe(false);
+  });
+});
+
+// FAKE_CLI_FLOOD trap SIGTERM exprès et ne meurt QUE sur SIGKILL, après
+// killGraceMs (injecté volontairement long ici — 2000 ms, toujours très en
+// deçà du testTimeout global de 15 s) : reproduit un process qui "tarde à
+// mourir" pendant toute la fenêtre de grâce. Le point testé n'est PAS que
+// le kill finit par aboutir (déjà couvert par FAKE_CLI_HANG plus haut) mais
+// que la LECTURE s'arrête bien au franchissement du cap, avant même que le
+// process ne meure — sinon le flux continuerait à remplir le buffer du
+// runner pendant ces 2000 ms entiers (Fix round 2).
+describe("runLaneMessage — FAKE_CLI_FLOOD : le cap stdout arrête la lecture, pas juste le process", () => {
+  it("un process qui ignore SIGTERM et continue d'inonder stdout pendant toute la fenêtre de grâce ne fait PAS grossir le buffer au-delà du cap + une marge d'un chunk", async () => {
+    const f = await fixture(FAKE_CLI_FLOOD);
+    const events: LaneRunEvent[] = [];
+
+    await runLaneMessage({
+      workspaceId: f.workspaceId, laneId: f.lane.id,
+      userMessage: "inonde-moi et ignore le SIGTERM",
+      onEvent: (e) => events.push(e),
+      killGraceMs: 2000,
+    });
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent as { message: string }).message).toMatch(/volumineuse/);
+
+    const messages = await getLaneMessages(f.workspaceId, f.lane.id);
+    const systemMessage = messages!.find((m) => m.role === "system");
+    expect(systemMessage).toBeTruthy();
+
+    // Preuve NUMÉRIQUE, pas juste comportementale : le compte d'octets que
+    // le runner a réellement laissés entrer (annoncé dans le message
+    // system) reste borné à ~MAX_OUTPUT_BYTES + une marge d'UN chunk lu,
+    // PAS à des dizaines de Mio — ce que produirait un flux encore lu
+    // pendant les 2000 ms entiers de fenêtre de grâce (le bug fermé par ce
+    // fix round). La fixture écrit ~63 Mio/s sans backpressure (mesuré
+    // hors test, en écrivant vers un fichier) : si la lecture n'était pas
+    // coupée au cap, ce test verrait un compte de plusieurs dizaines de
+    // Mio, pas quelques Mio.
+    const match = systemMessage!.body.match(/\((\d+) octets reçus/);
+    expect(match).toBeTruthy();
+    const bytesReceived = Number(match![1]);
+    const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+    const CHUNK_MARGIN = 1024 * 1024; // large marge (chunk fixture = 64 Kio) pour tolérer des tailles de lecture système différentes, tout en restant très loin des dizaines de Mio du scénario bogué.
+    expect(bytesReceived).toBeGreaterThan(MAX_OUTPUT_BYTES); // le cap a bien été franchi, sinon le test ne teste rien.
+    expect(bytesReceived).toBeLessThan(MAX_OUTPUT_BYTES + CHUNK_MARGIN);
 
     const lane = await getLane(f.workspaceId, f.lane.id);
     expect(lane?.status).toBe("error");
