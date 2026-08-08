@@ -8,6 +8,7 @@ import {
   createGaugeSource, listGaugeSources, getGaugeSource,
   updateGaugeSource, deleteGaugeSource,
   fetchGaugeSource, refreshGauges, getGaugesState,
+  redactHeadersForClient,
 } from "@/lib/gauges";
 import { signUpTestUser } from "./helpers";
 
@@ -250,6 +251,34 @@ describe("createGaugeSource — validation + SSRF", () => {
     }
   });
 
+  it("172.16.0.0/12 (RFC1918) refusé sur toute la plage, mais PAS hors plage (172.15.*, 172.32.*)", async () => {
+    const ws = await signUpTestUser();
+    for (const bad of ["http://172.16.0.5/health", "http://172.31.255.255/health"]) {
+      await expect(
+        createGaugeSource(ws.workspaceId, { name: "x", url: bad, kind: "quota" })
+      ).rejects.toThrow(/IP privée/);
+    }
+    // contrôle négatif : hors plage, ne doit PAS être bloqué à tort.
+    for (const ok of ["http://172.15.0.1/health", "http://172.32.0.1/health"]) {
+      await expect(
+        createGaugeSource(ws.workspaceId, { name: "x", url: ok, kind: "quota" })
+      ).resolves.toBeTruthy();
+    }
+  });
+
+  it("100.64.0.0/10 (CGNAT) refusé sur toute la plage, mais PAS hors plage (100.63.*, 100.128.*)", async () => {
+    const ws = await signUpTestUser();
+    await expect(
+      createGaugeSource(ws.workspaceId, { name: "x", url: "http://100.64.0.1/health", kind: "quota" })
+    ).rejects.toThrow(/IP privée/);
+    // contrôle négatif : hors plage, ne doit PAS être bloqué à tort.
+    for (const ok of ["http://100.63.255.255/health", "http://100.128.0.1/health"]) {
+      await expect(
+        createGaugeSource(ws.workspaceId, { name: "x", url: ok, kind: "quota" })
+      ).resolves.toBeTruthy();
+    }
+  });
+
   it("localhost et 127.0.0.1 explicitement autorisés (self-host)", async () => {
     const ws = await signUpTestUser();
     const a = await createGaugeSource(ws.workspaceId, {
@@ -360,6 +389,27 @@ describe("listGaugeSources / getGaugeSource / updateGaugeSource / deleteGaugeSou
     });
     const updated = await updateGaugeSource(ws.workspaceId, source.id, { enabled: false });
     expect(updated?.enabled).toBe(false);
+  });
+
+  // Durcissement (revue finale, vague cockpit) : PATCH /api/gauges/[id]
+  // (toggle enabled/disabled dans la page réglages) renvoyait la ligne
+  // updateGaugeSource TELLE QUELLE au client, headers en clair inclus —
+  // même fuite que GET avant son fix, juste déclenchée par un clic plutôt
+  // qu'un poll. La route applique désormais redactHeadersForClient (comme
+  // getGaugesState) : ce test prouve que la fonction retire bien la valeur
+  // du header sur une ligne réelle issue d'updateGaugeSource.
+  it("redactHeadersForClient appliqué à la ligne updateGaugeSource (route PATCH) : plus de valeur de header, seulement la clé", async () => {
+    const ws = await signUpTestUser();
+    const source = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge", url: "https://example.com", kind: "quota",
+      headers: { "x-api-key": "secret-jamais-renvoye-au-patch" },
+    });
+    const updated = await updateGaugeSource(ws.workspaceId, source.id, { enabled: false });
+    const redacted = redactHeadersForClient(updated!);
+
+    expect(redacted).not.toHaveProperty("headers");
+    expect(redacted.headerKeys).toEqual(["x-api-key"]);
+    expect(JSON.stringify(redacted)).not.toContain("secret-jamais-renvoye-au-patch");
   });
 
   it("deleteGaugeSource supprime définitivement", async () => {
@@ -547,5 +597,38 @@ describe("getGaugesState — cache 5 minutes + coût total", () => {
 
     expect(stateA.sources).toEqual([]);
     expect(stateA.totalCostEur).toBe(0);
+  });
+
+  // Durcissement (vague finale) : GET /api/gauges est pollé EN CLAIR par le
+  // navigateur toutes les 5 min (SubscriptionGauges) — un x-api-key posé
+  // dans `headers` à la création ne doit JAMAIS y réapparaître.
+  it("headers JAMAIS exposés en clair : seules les CLÉS sortent, jamais les valeurs (x-api-key)", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ costMonthlyEur: 1 }));
+    await createGaugeSource(ws.workspaceId, {
+      name: "Bridge", url: srv.url, kind: "cost",
+      headers: { "x-api-key": "secret-ne-doit-jamais-sortir" },
+    });
+
+    const state = await getGaugesState(ws.workspaceId, {});
+    await srv.close();
+
+    const source = state.sources[0] as unknown as Record<string, unknown>;
+    expect(source).not.toHaveProperty("headers");
+    expect(source.headerKeys).toEqual(["x-api-key"]);
+    // Preuve POSITIVE, pas juste l'absence du champ attendu : le secret
+    // n'apparaît nulle part dans le JSON sérialisé de l'état entier.
+    expect(JSON.stringify(state)).not.toContain("secret-ne-doit-jamais-sortir");
+  });
+
+  it("source sans headers configurés → headerKeys vide", async () => {
+    const ws = await signUpTestUser();
+    const srv = await startServer(jsonHandler({ costMonthlyEur: 1 }));
+    await createGaugeSource(ws.workspaceId, { name: "Bridge", url: srv.url, kind: "cost" });
+
+    const state = await getGaugesState(ws.workspaceId, {});
+    await srv.close();
+
+    expect((state.sources[0] as unknown as { headerKeys: string[] }).headerKeys).toEqual([]);
   });
 });

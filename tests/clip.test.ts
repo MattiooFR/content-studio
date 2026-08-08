@@ -5,6 +5,9 @@ import { signUpTestUser } from "./helpers";
 import { generateMcpToken } from "@/lib/tenant";
 import { getIdea } from "@/lib/ideas";
 import { getSource } from "@/lib/sources";
+import {
+  MAX_SOURCE_EXCERPT_LENGTH, MAX_SOURCE_REF_LENGTH, MAX_SOURCE_TITLE_LENGTH,
+} from "@/lib/sources";
 
 function clipRequest(
   body: Record<string, unknown>,
@@ -17,6 +20,19 @@ function clipRequest(
       ...(authToken && { authorization: `Bearer ${authToken}` }),
     },
     body: JSON.stringify(body),
+  });
+}
+
+// Corps BRUT (pas de JSON.stringify) : seule façon de reproduire un req.json()
+// qui throw, ou un JSON valide mais pas un objet à plat (durcissement 4).
+function rawClipRequest(rawBody: string, authToken?: string) {
+  return new NextRequest("http://localhost:3003/api/clip", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(authToken && { authorization: `Bearer ${authToken}` }),
+    },
+    body: rawBody,
   });
 }
 
@@ -96,6 +112,94 @@ describe("POST /api/clip", () => {
       const data = await res.json() as { sourceId: string };
       const source = await getSource(ws.workspaceId, data.sourceId);
       expect(source?.rawExcerpt).toBe("");
+    });
+  });
+
+  // Durcissement 4 (revue finale, vague cockpit) : req.json() throw sur un
+  // corps non-JSON, et la destructuration qui suivait throw sur `null` —
+  // les deux remontaient en 500 générique. Toujours 400 { error: "corps
+  // invalide" } désormais, jamais un 500.
+  describe("corps invalide (durcissement)", () => {
+    it("corps non-JSON (chaîne brute cassée) → 400 'corps invalide', jamais 500", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+      const res = await POST(rawClipRequest("ceci n'est pas du JSON {{{", token));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toBe("corps invalide");
+    });
+
+    it("corps vide → 400 'corps invalide'", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+      const res = await POST(rawClipRequest("", token));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toBe("corps invalide");
+    });
+
+    it.each([
+      ["null", "null"],
+      ["tableau", "[1,2,3]"],
+      ["chaîne", '"juste une chaîne"'],
+      ["nombre", "42"],
+    ])("JSON valide mais pas un objet à plat (%s) → 400 'corps invalide'", async (_label, rawBody) => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+      const res = await POST(rawClipRequest(rawBody, token));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toBe("corps invalide");
+    });
+  });
+
+  // Durcissement 6 (revue finale, vague cockpit) : mêmes bornes qu'addSource
+  // (src/lib/sources.ts), réutilisées ici via les MÊMES constantes exportées
+  // — une valeur hors bornes est une entrée CASSÉE (400), jamais tronquée.
+  describe("bornes anti-DoS (durcissement)", () => {
+    it("URL au-delà de MAX_SOURCE_REF_LENGTH → 400", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+      const tooLongUrl = `https://example.com/${"x".repeat(MAX_SOURCE_REF_LENGTH)}`;
+      const res = await POST(clipRequest({ url: tooLongUrl }, token));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/URL trop longue/);
+    });
+
+    it("title au-delà de MAX_SOURCE_TITLE_LENGTH → 400", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+      const res = await POST(clipRequest({
+        url: "https://example.com/page",
+        title: "x".repeat(MAX_SOURCE_TITLE_LENGTH + 1),
+      }, token));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/title trop long/);
+    });
+
+    it("selection au-delà de MAX_SOURCE_EXCERPT_LENGTH → 400", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+      const res = await POST(clipRequest({
+        url: "https://example.com/page",
+        selection: "x".repeat(MAX_SOURCE_EXCERPT_LENGTH + 1),
+      }, token));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/selection trop longue/);
+    });
+
+    it("title/selection exactement à la borne → 200, acceptés", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "test-clipper");
+      const res = await POST(clipRequest({
+        url: "https://example.com/page",
+        title: "x".repeat(MAX_SOURCE_TITLE_LENGTH),
+        selection: "x".repeat(MAX_SOURCE_EXCERPT_LENGTH),
+      }, token));
+      expect(res.status).toBe(200);
     });
   });
 

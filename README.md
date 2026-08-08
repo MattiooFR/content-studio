@@ -11,6 +11,35 @@ abonnement IA travaille, l'outil orchestre.
     BETTER_AUTH_SECRET=$(openssl rand -hex 32) docker compose up -d --build
     # http://localhost:3003 → créer un compte (workspace + 3 canaux créés automatiquement)
 
+## Sécurité / déploiement
+
+**Par défaut, l'app n'écoute QUE sur `127.0.0.1`** — `npm run dev` et `npm run start`
+(exécution bare, hors Docker) bindent explicitement le loopback. Un déploiement via
+`docker compose` reste identique à l'usage (le conteneur écoute en interne sur toutes ses
+interfaces, requis par le NAT de publication de port de Docker) mais le port publié côté
+hôte, `docker-compose.yml`, est lui aussi restreint à `127.0.0.1:3003:3003` — même schéma que
+`postgres` juste au-dessus dans le même fichier. Dans les deux cas, l'app est injoignable
+depuis le réseau/internet tant qu'aucune étape supplémentaire n'a été prise.
+
+**Exposer l'instance au-delà de ta propre machine = deux étapes, en conscience :**
+
+1. Un reverse-proxy (nginx, Caddy, Traefik…) devant `127.0.0.1:3003`, avec TLS. Ne jamais
+   remapper le port Docker sur `0.0.0.0` directement.
+2. `DISABLE_SIGNUP=1` (ou `true`) dans l'environnement, **une fois ton compte owner créé**.
+   Signup reste ouvert par défaut (pratique en dev local mono-utilisateur) : combiné à un port
+   joignable, un signup ouvert permet à n'importe qui de créer un workspace puis de
+   configurer `laneCommand` (Réglages → Lanes) — voir l'avertissement ci-dessous, c'est
+   l'exécution de commande à distance. Le tout premier compte créé sur une base encore vide
+   reste toujours autorisé, même `DISABLE_SIGNUP=1` posé avant le premier démarrage
+   (bootstrap : impossible sinon de créer le compte owner lui-même).
+
+**Rappel qui vaut pour toute la section Lanes ci-dessous : les lanes exécutent des commandes
+sur l'hôte qui fait tourner le serveur.** Sur cette version, self-host, l'accès à l'instance
+(un compte + un token, ou une session) EST un accès shell à cette machine, au travers de
+`laneCommand`. Ce n'est pas un bug à corriger plus tard, c'est l'architecture (cf. section
+Lanes, « Self-host uniquement ») — raison de plus pour ne jamais exposer une instance en
+signup ouvert.
+
 ## Dev
 
     docker compose up -d postgres
@@ -138,8 +167,9 @@ rafraîchit lui-même toutes les 5 minutes, plus un bouton manuel (↻).
 
 En self-host, les bridges locaux de l'utilisateur SONT le cas d'usage : `localhost`,
 `127.0.0.1` et `[::1]` sont explicitement autorisés comme cible de jauge. Le reste de
-`127.0.0.0/8`, `10.*`, `192.168.*`, `169.254.*` et `0.0.0.0` écrits en clair dans l'URL sont
-refusés à la création — mais cette liste ne couvre QUE les adresses IP littérales : elle
+`127.0.0.0/8`, `10.*`, `192.168.*`, `169.254.*`, `172.16.0.0/12` (172.16.\* à 172.31.\*),
+`100.64.0.0/10` (100.64.\* à 100.127.\*, plage CGNAT) et `0.0.0.0` écrits en clair dans l'URL
+sont refusés à la création — mais cette liste ne couvre QUE les adresses IP littérales : elle
 n'empêche pas un nom d'hôte qui résout vers une IP privée (DNS rebinding). **Ce n'est pas la
 protection réelle d'un déploiement SaaS multi-tenant** — celle-là est le firewall d'egress
 réseau du déploiement, pas cette validation applicative côté app. Aucune redirection (3xx)
@@ -189,9 +219,10 @@ texte exécuté par le shell, donc incapable d'en ouvrir une nouvelle commande.
 
 - **Timeout dur : 120 secondes.** Au-delà, l'arbre de process entier est tué (SIGTERM puis
   SIGKILL après 5 s de grâce si le premier signal est ignoré), la lane passe en statut `error`.
-- **Cap stdout anti-DoS : 2 MiB.** Un CLI qui inonde sa sortie est coupé — la LECTURE s'arrête
-  au cap, pas seulement un kill demandé : même un process qui ignore SIGTERM pendant toute la
-  fenêtre de grâce ne fait pas grossir le buffer au-delà.
+- **Cap anti-DoS : 2 MiB, sur stdout ET stderr indépendamment.** Un CLI qui inonde l'un ou
+  l'autre flux est coupé — la LECTURE s'arrête au cap, pas seulement un kill demandé : même
+  un process qui ignore SIGTERM pendant toute la fenêtre de grâce ne fait pas grossir le
+  buffer au-delà.
 - Le verrou (une seule exécution à la fois par lane, 409 sur un 2e message concurrent) est
   TOUJOURS relâché en sortie, quel que soit le chemin (succès, erreur CLI, timeout, cap
   dépassé).

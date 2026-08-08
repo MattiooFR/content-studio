@@ -15,9 +15,27 @@ type AddSourceInput = {
 // avec la table assets réelle.
 const AVAILABLE_KINDS_V1: SourceKind[] = ["url", "text"];
 
+// Bornes de durcissement DoS (même style que gauges.ts : MAX_NAME_LENGTH,
+// MAX_URL_LENGTH…) — exportées pour que /api/clip (qui écrit directement en
+// base, sans passer par addSource) applique les MÊMES bornes plutôt que
+// des constantes dupliquées. Une valeur hors bornes est une entrée CASSÉE
+// (error/400), jamais tronquée en silence.
+export const MAX_SOURCE_TITLE_LENGTH = 300;
+export const MAX_SOURCE_EXCERPT_LENGTH = 10000;
+export const MAX_SOURCE_REF_LENGTH = 2000;
+
 export async function addSource(workspaceId: string, input: AddSourceInput) {
   if (!AVAILABLE_KINDS_V1.includes(input.kind)) {
     throw new Error("kind non disponible en v1");
+  }
+  if (input.ref.length > MAX_SOURCE_REF_LENGTH) {
+    throw new Error(`ref trop long (max ${MAX_SOURCE_REF_LENGTH} caractères)`);
+  }
+  if (input.title !== undefined && input.title.length > MAX_SOURCE_TITLE_LENGTH) {
+    throw new Error(`title trop long (max ${MAX_SOURCE_TITLE_LENGTH} caractères)`);
+  }
+  if (input.rawExcerpt !== undefined && input.rawExcerpt.length > MAX_SOURCE_EXCERPT_LENGTH) {
+    throw new Error(`rawExcerpt trop long (max ${MAX_SOURCE_EXCERPT_LENGTH} caractères)`);
   }
   // kind "url" : schéma validé ICI, au niveau lib — couvre UI + MCP + le futur
   // /api/clip (W4) d'un coup, une seule règle. Sans ça, `javascript:`/`data:`

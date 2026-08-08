@@ -17,11 +17,19 @@ services:
   app:
     build: .
     ports:
-      - "3003:3003"
+      # Loopback host-side, comme postgres ci-dessus : le conteneur écoute
+      # toujours 0.0.0.0 en interne (start:docker, requis par le NAT de
+      # publication de port de Docker), mais le port n'est publié QUE sur
+      # l'interface loopback de la machine hôte — injoignable depuis le
+      # réseau/internet par défaut. Exposer publiquement = un reverse-proxy
+      # en conscience (cf. README, section Sécurité / déploiement), pas ce
+      # mapping par défaut.
+      - "127.0.0.1:3003:3003"
     environment:
       DATABASE_URL: postgres://cs:cs@postgres:5432/content_studio
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET requis}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3003}
+      DISABLE_SIGNUP: ${DISABLE_SIGNUP:-}
     depends_on:
       - postgres
 volumes:

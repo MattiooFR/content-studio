@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { ideas, sources } from "@/lib/db/schema";
 import { resolveMcpToken } from "@/lib/tenant";
+import {
+  MAX_SOURCE_EXCERPT_LENGTH, MAX_SOURCE_REF_LENGTH, MAX_SOURCE_TITLE_LENGTH,
+} from "@/lib/sources";
 
 // CORS pour l'extension Chrome (W5) UNIQUEMENT.
 //
@@ -43,9 +46,21 @@ export async function POST(req: NextRequest) {
       return json({ error: "unauthorized" }, 401);
     }
 
-    // Parse body
-    const body = await req.json();
-    const { url, title, selection } = body;
+    // Parse body — un corps non-JSON (extension buggée, appel manuel cassé,
+    // sonde hostile) throw sur req.json() : jamais laissé remonter en 500,
+    // toujours une 400 lisible. Idem pour un JSON valide mais qui n'est pas
+    // un objet à plat (null, tableau, string, nombre) — la destructuration
+    // qui suit throw sur `null` sans ce garde-fou.
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return json({ error: "corps invalide" }, 400);
+    }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return json({ error: "corps invalide" }, 400);
+    }
+    const { url, title, selection } = body as Record<string, unknown>;
 
     // Validation : URL est obligatoire et string
     if (typeof url !== "string" || !url.trim()) {
@@ -65,6 +80,23 @@ export async function POST(req: NextRequest) {
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return json({ error: "URL invalide (http/https attendu)" }, 400);
+    }
+
+    // Bornes anti-DoS (durcissement, mêmes constantes qu'addSource — voir
+    // src/lib/sources.ts) : une valeur hors bornes est une entrée CASSÉE
+    // (400), jamais tronquée en silence. Ignoré si non-string : cohérent
+    // avec la validation title/selection ci-dessus (juste au-dessus), qui
+    // tombe alors sur son fallback plutôt que d'échouer.
+    if (url.length > MAX_SOURCE_REF_LENGTH) {
+      return json({ error: `URL trop longue (max ${MAX_SOURCE_REF_LENGTH} caractères)` }, 400);
+    }
+    if (typeof title === "string" && title.length > MAX_SOURCE_TITLE_LENGTH) {
+      return json({ error: `title trop long (max ${MAX_SOURCE_TITLE_LENGTH} caractères)` }, 400);
+    }
+    if (typeof selection === "string" && selection.length > MAX_SOURCE_EXCERPT_LENGTH) {
+      return json(
+        { error: `selection trop longue (max ${MAX_SOURCE_EXCERPT_LENGTH} caractères)` }, 400
+      );
     }
 
     // Title fallback (ignoré si non-string)

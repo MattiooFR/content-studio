@@ -39,6 +39,10 @@ export async function POST(
       return NextResponse.json({ error: e.message }, { status: 400 });
     if (e instanceof Error && e.message.includes("URL invalide"))
       return NextResponse.json({ error: e.message }, { status: 400 });
+    // Bornes anti-DoS d'addSource (durcissement, cf. src/lib/sources.ts) :
+    // "ref/title/rawExcerpt trop long(ue)" → 400, jamais un 500 générique.
+    if (e instanceof Error && e.message.includes("trop long"))
+      return NextResponse.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }

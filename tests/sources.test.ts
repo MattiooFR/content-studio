@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createIdea } from "@/lib/ideas";
 import {
   addSource, listSources, getSource, attachExtraction, markSourceFailed,
+  MAX_SOURCE_EXCERPT_LENGTH, MAX_SOURCE_REF_LENGTH, MAX_SOURCE_TITLE_LENGTH,
 } from "@/lib/sources";
 import { signUpTestUser } from "./helpers";
 
@@ -83,6 +84,51 @@ describe("sources — cycle pending → extracted", () => {
       ideaId: idea.id, kind: "url", ref: "https://exemple.fr/page",
     });
     expect(source.ref).toBe("https://exemple.fr/page");
+  });
+});
+
+// Durcissement (revue finale, vague cockpit) : ref/title/rawExcerpt n'avaient
+// aucune borne de longueur, contrairement au style déjà en place dans
+// gauges.ts (MAX_NAME_LENGTH, MAX_URL_LENGTH…). Une valeur hors bornes est
+// une entrée CASSÉE (throw), jamais tronquée en silence — /api/clip réutilise
+// ces MÊMES constantes (voir tests/clip.test.ts).
+describe("sources — bornes anti-DoS (ref/title/rawExcerpt)", () => {
+  it("ref au-delà de MAX_SOURCE_REF_LENGTH → throw, ref exactement à la borne accepté", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+
+    await expect(
+      addSource(ws.workspaceId, { ideaId: idea.id, kind: "text", ref: "x".repeat(MAX_SOURCE_REF_LENGTH + 1) })
+    ).rejects.toThrow(/ref trop long/);
+
+    const atLimit = await addSource(ws.workspaceId, {
+      ideaId: idea.id, kind: "text", ref: "x".repeat(MAX_SOURCE_REF_LENGTH),
+    });
+    expect(atLimit.ref.length).toBe(MAX_SOURCE_REF_LENGTH);
+  });
+
+  it("title au-delà de MAX_SOURCE_TITLE_LENGTH → throw", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+
+    await expect(
+      addSource(ws.workspaceId, {
+        ideaId: idea.id, kind: "text", ref: "texte",
+        title: "x".repeat(MAX_SOURCE_TITLE_LENGTH + 1),
+      })
+    ).rejects.toThrow(/title trop long/);
+  });
+
+  it("rawExcerpt au-delà de MAX_SOURCE_EXCERPT_LENGTH → throw", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+
+    await expect(
+      addSource(ws.workspaceId, {
+        ideaId: idea.id, kind: "text", ref: "texte",
+        rawExcerpt: "x".repeat(MAX_SOURCE_EXCERPT_LENGTH + 1),
+      })
+    ).rejects.toThrow(/rawExcerpt trop long/);
   });
 });
 

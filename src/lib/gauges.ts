@@ -120,10 +120,14 @@ export async function fetchGaugeSource(
 // locaux de l'utilisateur SONT le cas d'usage : localhost et 127.0.0.1 sont
 // donc explicitement autorisés, alors que le reste de la plage 127.0.0.0/8
 // (souvent utilisée pour désigner d'autres process locaux qu'on ne veut pas
-// exposer par erreur) reste refusé, comme 10.*, 192.168.*, 169.254.* et
-// 0.0.0.0. IPv6 littéral : bloqué EN BLOC sauf `[::1]` (même logique que
-// 127.0.0.1) — pas de parsing fin des plages ULA/link-local, un refus large
-// coûte trois lignes et rien de légitime ne perd au change en self-host.
+// exposer par erreur) reste refusé, comme 10.*, 192.168.*, 169.254.*,
+// 172.16.0.0/12 (172.16.* à 172.31.*, RFC1918 — manquait initialement),
+// 100.64.0.0/10 (100.64.* à 100.127.*, CGNAT partagé — manquait
+// initialement, largement utilisé par les fournisseurs cloud/VPN pour du
+// routage interne) et 0.0.0.0. IPv6 littéral : bloqué EN BLOC sauf `[::1]`
+// (même logique que 127.0.0.1) — pas de parsing fin des plages
+// ULA/link-local, un refus large coûte trois lignes et rien de légitime ne
+// perd au change en self-host.
 function isDisallowedPrivateLiteralIp(hostname: string): boolean {
   const host = hostname.toLowerCase();
 
@@ -137,6 +141,10 @@ function isDisallowedPrivateLiteralIp(hostname: string): boolean {
   if (/^10\./.test(host)) return true;
   if (/^192\.168\./.test(host)) return true;
   if (/^169\.254\./.test(host)) return true;
+  // 172.16.0.0/12 : 2e octet dans [16,31].
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  // 100.64.0.0/10 : 2e octet dans [64,127].
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return true;
   return false;
 }
 
@@ -292,6 +300,25 @@ function isStale(lastFetchedAt: Date | null): boolean {
   return Date.now() - lastFetchedAt.getTime() > CACHE_TTL_MS;
 }
 
+// GET /api/gauges est pollé EN CLAIR par le navigateur (SubscriptionGauges,
+// toutes les 5 min + bouton manuel) : les VALEURS de `headers` (où vit un
+// x-api-key utilisateur, cf. validateHeaders plus haut) ne doivent JAMAIS
+// atterrir dans cette réponse — sinon chaque poll les exfiltre au client
+// pour rien, la page réglages ne les relit même pas (elle les redemande à
+// l'édition). Seules les CLÉS sortent (utile pour un futur affichage
+// "headers déjà configurés" côté réglages), jamais les valeurs.
+//
+// Exportée : PATCH /api/gauges/[id] (updateGaugeSource, toggle
+// enabled/disabled) renvoie lui aussi la ligne complète au client à chaque
+// appel — même fuite que GET si elle n'est pas redigée ici aussi, juste
+// déclenchée par un clic plutôt qu'un poll.
+export function redactHeadersForClient<T extends { headers: unknown }>(
+  row: T
+): Omit<T, "headers"> & { headerKeys: string[] } {
+  const { headers, ...rest } = row;
+  return { ...rest, headerKeys: Object.keys((headers ?? {}) as Record<string, string>) };
+}
+
 /**
  * État agrégé consommé par GET /api/gauges. Sans ?refresh=1, ne repolle QUE
  * si une source enabled n'a jamais été fetchée ou est périmée (>5 min) —
@@ -317,5 +344,5 @@ export async function getGaugesState(
       return typeof payload.costMonthlyEur === "number" ? sum + payload.costMonthlyEur : sum;
     }, 0);
 
-  return { sources, totalCostEur };
+  return { sources: sources.map(redactHeadersForClient), totalCostEur };
 }

@@ -33,6 +33,10 @@
 #                            AU CAP (pas juste qu'un kill est demandé) :
 #                            sans ça, ce script inonderait le buffer du
 #                            runner pendant toute la fenêtre de grâce.
+#   FAKE_CLI_FLOOD_STDERR=1 → même scénario que FAKE_CLI_FLOOD, mais le flot
+#                            va sur STDERR (>&2) au lieu de stdout. Teste
+#                            que le cap stderr (Fix round 3) borne LUI AUSSI
+#                            la lecture, symétriquement au cap stdout.
 
 if [ "${FAKE_CLI_HANG:-}" = "1" ]; then
   printf '{"type":"system","subtype":"init","session_id":"fake-session-hang"}\n'
@@ -46,6 +50,15 @@ if [ "${FAKE_CLI_FLOOD:-}" = "1" ]; then
   chunk=$(head -c 65536 /dev/zero | tr '\0' 'b')
   while true; do
     printf '%s' "$chunk"
+  done
+fi
+
+if [ "${FAKE_CLI_FLOOD_STDERR:-}" = "1" ]; then
+  trap '' TERM
+  printf '{"type":"system","subtype":"init","session_id":"fake-session-flood-stderr"}\n'
+  chunk=$(head -c 65536 /dev/zero | tr '\0' 'e')
+  while true; do
+    printf '%s' "$chunk" >&2
   done
 fi
 

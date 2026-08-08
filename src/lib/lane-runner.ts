@@ -107,6 +107,7 @@ type ParseResult = {
   sessionId: string | null;
   terminationReason: TerminationReason;
   stdoutBytes: number;
+  stderrBytes: number;
 };
 
 /**
@@ -139,6 +140,17 @@ type ParseResult = {
  * au-delà des 2 MiB annoncés — c'est le bug fermé ici (cf.
  * `readBodyCapped` dans `src/lib/gauges.ts`, qui fait déjà `cancel()` +
  * retour immédiat pour la même raison).
+ *
+ * STDERR (Fix round 3 — revue adversariale, vague finale) : le MÊME cap,
+ * la MÊME étanchéité (gate `terminating` + `pause()`/`removeAllListeners`
+ * au franchissement), s'applique à `stderr` — avant ce fix, `stderrBuffer`
+ * accumulait sans aucune borne pendant toute la fenêtre de `timeoutMs`
+ * (jusqu'à 120 s par défaut), seul le TAIL final (`STDERR_TAIL_MAX`, 500
+ * caractères) était borné — trop tard, l'OOM se produit pendant
+ * l'accumulation, pas à la troncature. `terminate()` coupe désormais LES
+ * DEUX flux d'un coup dès que l'un ou l'autre franchit son cap ou que le
+ * timeout tombe : une fois la décision de tuer l'arbre prise, plus aucune
+ * raison de continuer à lire quoi que ce soit.
  */
 function spawnAndParse(
   laneCommand: string,
@@ -157,6 +169,7 @@ function spawnAndParse(
     let terminating = false;
     let reason: TerminationReason = "exit";
     let totalBytes = 0;
+    let stderrBytes = 0;
     let killGraceTimer: ReturnType<typeof setTimeout> | undefined;
 
     const clearTimers = () => {
@@ -170,13 +183,16 @@ function spawnAndParse(
       reason = why;
       // Coupe la lecture MAINTENANT, avant même d'envoyer le signal : le
       // kill peut prendre jusqu'à killGraceMs (voire ne jamais aboutir sur
-      // SIGTERM si le process l'ignore), mais stdoutBuffer ne doit plus
-      // grossir d'un octet à partir d'ici. pause() + retrait du listener
-      // stoppe le flux au niveau du stream ; le flag `terminating`, vérifié
-      // en tête du handler `data`, couvre aussi un chunk déjà en vol dans
-      // la boucle d'événements au moment de cet appel.
+      // SIGTERM si le process l'ignore), mais ni stdoutBuffer ni
+      // stderrBuffer ne doivent plus grossir d'un octet à partir d'ici.
+      // pause() + retrait du listener stoppe CHAQUE flux au niveau du
+      // stream ; le flag `terminating`, vérifié en tête des DEUX handlers
+      // `data`, couvre aussi un chunk déjà en vol dans la boucle
+      // d'événements au moment de cet appel — pour stdout ET stderr.
       child.stdout?.pause();
       child.stdout?.removeAllListeners("data");
+      child.stderr?.pause();
+      child.stderr?.removeAllListeners("data");
       killProcessTree(child, "SIGTERM");
       killGraceTimer = setTimeout(() => killProcessTree(child, "SIGKILL"), opts.killGraceMs);
     };
@@ -233,7 +249,15 @@ function spawnAndParse(
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
+      // Même gate que le handler stdout ci-dessus : une décision de
+      // terminer déjà prise (timeout, cap stdout OU cap stderr déjà
+      // franchi) jette ce chunk sans même compter ses octets.
+      if (terminating) return;
+      stderrBytes += chunk.byteLength;
       stderrBuffer += chunk.toString("utf8");
+      if (stderrBytes > MAX_OUTPUT_BYTES) {
+        terminate("output_cap");
+      }
     });
 
     const finish = (exitCode: number | null) => {
@@ -248,6 +272,7 @@ function spawnAndParse(
         stderrTail: stderrBuffer.trim().slice(-STDERR_TAIL_MAX),
         sessionId, terminationReason: reason,
         stdoutBytes: totalBytes,
+        stderrBytes,
       });
     };
 
@@ -343,8 +368,12 @@ export async function runLaneMessage(p: {
       } else if (result.terminationReason === "output_cap") {
         // Le compte d'octets reçus est inclus : preuve observable (au-delà
         // du code) que la lecture a bien été coupée au cap, pas seulement
-        // qu'un kill a été demandé — voir Fix round 2.
-        message = `sortie trop volumineuse, interrompu (${result.stdoutBytes} octets reçus, cap ${MAX_OUTPUT_BYTES})`;
+        // qu'un kill a été demandé — voir Fix round 2. stdout et stderr ont
+        // chacun leur propre compteur (Fix round 3) ; celui qui a franchi
+        // le cap est forcément le plus grand des deux, l'autre reste petit
+        // (quelques lignes tout au plus avant le kill).
+        const bytesReceived = Math.max(result.stdoutBytes, result.stderrBytes);
+        message = `sortie trop volumineuse, interrompu (${bytesReceived} octets reçus, cap ${MAX_OUTPUT_BYTES})`;
       } else {
         message = `le CLI a quitté avec le code ${result.exitCode}` +
           (result.stderrTail ? ` : ${result.stderrTail}` : "");

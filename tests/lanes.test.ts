@@ -19,6 +19,7 @@ const FAKE_CLI_FAIL = `FAKE_CLI_FAIL=1 ${FAKE_CLI}`;
 const FAKE_CLI_HANG = `FAKE_CLI_HANG=1 ${FAKE_CLI}`;
 const FAKE_CLI_BIG_OUTPUT = `FAKE_CLI_BIG_OUTPUT=1 ${FAKE_CLI}`;
 const FAKE_CLI_FLOOD = `FAKE_CLI_FLOOD=1 ${FAKE_CLI}`;
+const FAKE_CLI_FLOOD_STDERR = `FAKE_CLI_FLOOD_STDERR=1 ${FAKE_CLI}`;
 
 async function fixture(command = FAKE_CLI) {
   const ws = await signUpTestUser();
@@ -331,6 +332,51 @@ describe("runLaneMessage — FAKE_CLI_FLOOD : le cap stdout arrête la lecture, 
     const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
     const CHUNK_MARGIN = 1024 * 1024; // large marge (chunk fixture = 64 Kio) pour tolérer des tailles de lecture système différentes, tout en restant très loin des dizaines de Mio du scénario bogué.
     expect(bytesReceived).toBeGreaterThan(MAX_OUTPUT_BYTES); // le cap a bien été franchi, sinon le test ne teste rien.
+    expect(bytesReceived).toBeLessThan(MAX_OUTPUT_BYTES + CHUNK_MARGIN);
+
+    const lane = await getLane(f.workspaceId, f.lane.id);
+    expect(lane?.status).toBe("error");
+    expect(isLaneBusy(f.lane.id)).toBe(false);
+  });
+});
+
+// Fix round 3 (revue finale, vague cockpit) : le cap stdout (FAKE_CLI_FLOOD
+// ci-dessus) a un jumeau stderr, symétrique en tout point (même gate
+// `terminating`, même pause()/removeAllListeners, même compteur dédié). Ce
+// test reproduit EXACTEMENT le même scénario que FAKE_CLI_FLOOD mais côté
+// stderr, pour prouver que stderrBuffer est LUI AUSSI borné pendant toute
+// la fenêtre de grâce — avant ce fix, ce flux était accumulé sans aucune
+// limite jusqu'au timeout de 120 s (OOM possible).
+describe("runLaneMessage — FAKE_CLI_FLOOD_STDERR : le cap stderr arrête la lecture, symétrique au cap stdout", () => {
+  it("un process qui ignore SIGTERM et continue d'inonder STDERR pendant toute la fenêtre de grâce ne fait PAS grossir le buffer au-delà du cap + une marge d'un chunk", async () => {
+    const f = await fixture(FAKE_CLI_FLOOD_STDERR);
+    const events: LaneRunEvent[] = [];
+
+    await runLaneMessage({
+      workspaceId: f.workspaceId, laneId: f.lane.id,
+      userMessage: "inonde stderr et ignore le SIGTERM",
+      onEvent: (e) => events.push(e),
+      killGraceMs: 2000,
+    });
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent as { message: string }).message).toMatch(/volumineuse/);
+
+    const messages = await getLaneMessages(f.workspaceId, f.lane.id);
+    const systemMessage = messages!.find((m) => m.role === "system");
+    expect(systemMessage).toBeTruthy();
+
+    // Même preuve NUMÉRIQUE que le test stdout jumeau : le compte d'octets
+    // reçus (côté stderr, cette fois) reste borné à ~MAX_OUTPUT_BYTES + une
+    // marge d'UN chunk lu — pas à des dizaines de Mio, ce que produirait un
+    // flux stderr encore lu pendant les 2000 ms entiers de fenêtre de grâce.
+    const match = systemMessage!.body.match(/\((\d+) octets reçus/);
+    expect(match).toBeTruthy();
+    const bytesReceived = Number(match![1]);
+    const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+    const CHUNK_MARGIN = 1024 * 1024;
+    expect(bytesReceived).toBeGreaterThan(MAX_OUTPUT_BYTES); // le cap a bien été franchi.
     expect(bytesReceived).toBeLessThan(MAX_OUTPUT_BYTES + CHUNK_MARGIN);
 
     const lane = await getLane(f.workspaceId, f.lane.id);
