@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/cockpit/status-badge";
 import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 import { ProposedBanner } from "@/components/proposed-banner";
 import { RevisionsPanel, type Revision } from "@/components/revisions-panel";
+import { useChatDrawer } from "@/components/cockpit/chat-drawer";
 
 type ContentWithChannel = {
   id: string; body: string; status: string; currentRevisionId: string | null;
@@ -16,6 +17,7 @@ const STATUSES = ["draft", "review", "approved", "published"] as const;
 
 export default function ContentPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { openForContent, openLaneById } = useChatDrawer();
   const [content, setContent] = useState<ContentWithChannel | null>(null);
   const [externalBody, setExternalBody] = useState<{ body: string; key: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -237,6 +239,19 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
           </button>
           <ExportButton body={content.body}
             format={content.channel.constraints.export_format ?? "markdown"} />
+          <button
+            type="button"
+            onClick={() => openForContent({
+              // titre STABLE par contenu (pas juste par canal) : c'est la clé
+              // que openForContent utilise pour retrouver/recréer LA MÊME
+              // lane à chaque clic, plutôt que d'en empiler une nouvelle.
+              title: `${content.channel.name} — ${id.slice(0, 8)}`,
+              contentId: id,
+            })}
+            className="rounded-full border border-line bg-raised px-2.5 py-1 text-[11px] font-medium tracking-wider text-muted uppercase transition-colors duration-150 hover:border-line-strong hover:text-ink"
+          >
+            💬 Chat
+          </button>
         </div>
       </div>
       {error && <p className="text-sm text-danger">{error}</p>}
@@ -265,7 +280,10 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
           setContent((prev) => prev ? { ...prev, currentRevisionId: revisionId, body } : prev);
         }}
       />
-      <RevisionsPanel revisions={revisions} currentBody={content.body} onRestore={restore} />
+      <RevisionsPanel
+        revisions={revisions} currentBody={content.body} onRestore={restore}
+        onOpenLane={openLaneById}
+      />
     </div>
   );
 }

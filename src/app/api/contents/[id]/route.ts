@@ -26,8 +26,12 @@ export async function PATCH(
     const { id } = await params;
     const patch = await req.json();
     if (typeof patch.body === "string") {
+      if (patch.laneId !== undefined && typeof patch.laneId !== "string") {
+        return NextResponse.json({ error: "laneId doit être une chaîne" }, { status: 400 });
+      }
       const r = await applyContentUpdate({
         workspaceId, contentId: id, body: patch.body, authorType: "user",
+        laneId: patch.laneId,
       });
       return NextResponse.json(r);
     }

@@ -143,13 +143,13 @@ const handler = createMcpHandler(
     server.registerTool(
       "update_content",
       {
-        description: "Écrit une nouvelle version du contenu (markdown complet, pas un diff). Si un humain est en train d'éditer, la version part en 'proposed' et lui est montrée en diff — c'est normal, ne pas ré-essayer.",
-        inputSchema: { content_id: z.string().uuid(), body: z.string() },
+        description: "Écrit une nouvelle version du contenu (markdown complet, pas un diff). Si un humain est en train d'éditer, la version part en 'proposed' et lui est montrée en diff — c'est normal, ne pas ré-essayer. lane_id optionnel : si cet appel a lieu DANS une conversation de lane (Task W11), passe-le pour que la révision porte le tag lane:<id> — la page contenu affiche alors un lien « ouvrir la conversation » dessus.",
+        inputSchema: { content_id: z.string().uuid(), body: z.string(), lane_id: z.string().uuid().optional() },
       },
-      async ({ content_id, body }, extra) =>
+      async ({ content_id, body, lane_id }, extra) =>
         json(await applyContentUpdate({
           workspaceId: wsOf(extra), contentId: content_id,
-          body, authorType: "agent", authorLabel: "mcp",
+          body, authorType: "agent", authorLabel: "mcp", laneId: lane_id,
         }))
     );
 

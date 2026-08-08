@@ -6,6 +6,7 @@ import {
 import { bus, type WorkspaceEvent } from "@/lib/events";
 import { createIdea } from "@/lib/ideas";
 import { createPersona } from "@/lib/personas";
+import { createLane } from "@/lib/lanes";
 import { signUpTestUser } from "./helpers";
 
 
@@ -174,5 +175,61 @@ describe("révisions", () => {
         personaId: bPersona.id,
       })
     ).rejects.toThrow(/persona introuvable/);
+  });
+});
+
+// Task W11 : une écriture faite DEPUIS une conversation de lane (via l'outil
+// MCP update_content, lane_id optionnel — ou le PATCH humain, même paramètre)
+// tague sa révision `lane:<id>`, pour que la page contenu puisse offrir
+// « ouvrir la conversation » dessus (RevisionsPanel détecte ce préfixe).
+describe("applyContentUpdate — laneId → authorLabel lane:<id>", () => {
+  it("laneId fourni : authorLabel devient lane:<id>, prend le pas sur authorLabel explicite", async () => {
+    const f = await fixture();
+    const lane = await createLane(f.workspaceId, { title: "Conversation test" });
+    const r = await applyContentUpdate({
+      workspaceId: f.workspaceId, contentId: f.contentId,
+      body: "écrit depuis une lane", authorType: "agent",
+      authorLabel: "mcp", // doit être écrasé par le format lane:<id>
+      laneId: lane.id,
+    });
+    const revs = await listRevisions(f.workspaceId, f.contentId);
+    const rev = revs.find((rv) => rv.id === r.revisionId);
+    expect(rev?.authorLabel).toBe(`lane:${lane.id}`);
+  });
+
+  it("pas de laneId : authorLabel explicite inchangé (comportement W10 préservé)", async () => {
+    const f = await fixture();
+    const r = await applyContentUpdate({
+      workspaceId: f.workspaceId, contentId: f.contentId,
+      body: "écrit hors lane", authorType: "agent", authorLabel: "mcp",
+    });
+    const revs = await listRevisions(f.workspaceId, f.contentId);
+    expect(revs.find((rv) => rv.id === r.revisionId)?.authorLabel).toBe("mcp");
+  });
+
+  it("laneId d'un AUTRE workspace → rejette, rien n'est écrit (cloisonnement)", async () => {
+    const f = await fixture();
+    const other = await signUpTestUser();
+    const otherLane = await createLane(other.workspaceId, { title: "Lane d'un autre workspace" });
+    const before = await listRevisions(f.workspaceId, f.contentId);
+    await expect(
+      applyContentUpdate({
+        workspaceId: f.workspaceId, contentId: f.contentId,
+        body: "ne doit jamais atterrir", authorType: "agent",
+        laneId: otherLane.id,
+      })
+    ).rejects.toThrow(/lane introuvable/);
+    const after = await listRevisions(f.workspaceId, f.contentId);
+    expect(after).toHaveLength(before.length); // aucune révision insérée
+  });
+
+  it("laneId inconnu (uuid random) → rejette de la même façon", async () => {
+    const f = await fixture();
+    await expect(
+      applyContentUpdate({
+        workspaceId: f.workspaceId, contentId: f.contentId,
+        body: "x", authorType: "agent", laneId: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/lane introuvable/);
   });
 });

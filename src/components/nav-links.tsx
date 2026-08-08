@@ -6,6 +6,7 @@ const LINKS = [
   { href: "/", label: "Idées" },
   { href: "/settings/gauges", label: "Jauges" },
   { href: "/settings/tokens", label: "Tokens MCP" },
+  { href: "/settings/workspace", label: "Lanes" },
 ];
 
 function isActive(pathname: string, href: string) {

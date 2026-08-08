@@ -9,11 +9,20 @@ export type Revision = {
   authorLabel: string; state: string; createdAt: string;
 };
 
-export function RevisionsPanel({ revisions, currentBody, onRestore }: {
+// Une révision écrite DEPUIS une conversation de lane (Task W11 — authorLabel
+// posé par applyContentUpdate quand un lane_id/laneId est fourni, cf.
+// src/lib/contents.ts) porte le tag "lane:<uuid>". Détecté ici plutôt que
+// dans authorType/authorLabel séparés : c'est le SEUL format qui encode
+// l'id de la lane, pas de colonne dédiée.
+const LANE_LABEL_RE = /^lane:([0-9a-fA-F-]{36})$/;
+
+export function RevisionsPanel({ revisions, currentBody, onRestore, onOpenLane }: {
   revisions: Revision[]; currentBody: string;
   // superseded uniquement — une "proposed" a déjà son propre bandeau
   // accepter/rejeter (ProposedBanner) et une "current" n'a rien à restaurer.
   onRestore: (rev: Revision) => void;
+  /** Optionnel : si fourni, une révision lane:<id> affiche "ouvrir la conversation". */
+  onOpenLane?: (laneId: string) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   return (
@@ -22,7 +31,9 @@ export function RevisionsPanel({ revisions, currentBody, onRestore }: {
         Révisions <span className="font-normal text-muted tabular-nums">({revisions.length})</span>
       </summary>
       <ul className="mt-4 space-y-2">
-        {revisions.map((r) => (
+        {revisions.map((r) => {
+          const laneMatch = r.authorLabel.match(LANE_LABEL_RE);
+          return (
           <li key={r.id} className="text-sm">
             <div className="flex w-full items-center gap-2">
               <button className="flex flex-1 items-center gap-2 text-left"
@@ -33,6 +44,11 @@ export function RevisionsPanel({ revisions, currentBody, onRestore }: {
                   {new Date(r.createdAt).toLocaleString("fr-FR")}
                 </span>
               </button>
+              {laneMatch && onOpenLane && (
+                <Button size="sm" variant="outline" onClick={() => onOpenLane(laneMatch[1])}>
+                  Ouvrir la conversation
+                </Button>
+              )}
               {r.state === "superseded" && (
                 <Button size="sm" variant="outline" onClick={() => onRestore(r)}>
                   Restaurer
@@ -50,7 +66,8 @@ export function RevisionsPanel({ revisions, currentBody, onRestore }: {
               </pre>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </details>
   );

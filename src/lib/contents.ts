@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { contents, contentRevisions, channels, ideas, personas } from "@/lib/db/schema";
 import { bus } from "@/lib/events";
+import { getLane } from "@/lib/lanes";
 
 export async function createContentDraft(p: {
   workspaceId: string; ideaId: string; channelKey: string; personaId?: string;
@@ -27,7 +28,23 @@ export async function createContentDraft(p: {
 export async function applyContentUpdate(p: {
   workspaceId: string; contentId: string; body: string;
   authorType: "agent" | "user"; authorLabel?: string;
+  // Écriture faite PENDANT une conversation de lane (Task W11) : quand fourni,
+  // le formatage `lane:<id>` PREND LE PAS sur `authorLabel` (source unique du
+  // format ici, pas dupliqué côté route PATCH / outil MCP — eux se contentent
+  // de transmettre l'id tel quel). C'est ce tag que la page contenu détecte
+  // (RevisionsPanel) pour afficher « ouvrir la conversation » sur la révision.
+  // Validé contre CE workspace comme tout autre id entrant : un laneId d'un
+  // autre workspace (ou inconnu) fait échouer l'écriture plutôt que de poser
+  // un tag qui ne mènera jamais à une conversation réelle.
+  laneId?: string;
 }): Promise<{ revisionId: string; state: "current" | "proposed" }> {
+  let authorLabel = p.authorLabel ?? "";
+  if (p.laneId !== undefined) {
+    const lane = await getLane(p.workspaceId, p.laneId);
+    if (!lane) throw new Error("lane introuvable dans ce workspace");
+    authorLabel = `lane:${p.laneId}`;
+  }
+
   const result = await db.transaction(async (tx) => {
     const [content] = await tx.select().from(contents)
       .where(and(eq(contents.id, p.contentId), eq(contents.workspaceId, p.workspaceId)))
@@ -40,7 +57,7 @@ export async function applyContentUpdate(p: {
 
     const [rev] = await tx.insert(contentRevisions).values({
       contentId: p.contentId, body: p.body,
-      authorType: p.authorType, authorLabel: p.authorLabel ?? "",
+      authorType: p.authorType, authorLabel,
       state: proposed ? "proposed" : "current",
     }).returning();
 
