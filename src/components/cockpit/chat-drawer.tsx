@@ -16,20 +16,31 @@ type ChatMessage = {
   body: string; createdAt: string;
 };
 type MentionItem = { type: "idea" | "content"; id: string; label: string; sublabel: string };
+export type MentionRef = { type: "idea" | "content"; id: string; label: string };
 
-// ---- @références : marqueur ET protocole -----------------------------------
-// `[titre](cs://idea/<uuid>)` — visible et lisible dans le champ de saisie
-// (l'utilisateur voit ce qu'il a référencé), mais `cs://` ne DOIT jamais
-// atteindre le CLI : `resolveMessageForCli` le remplace toujours avant le
-// POST, soit par un bloc de contexte (référence résolue), soit — en dernier
-// recours si la référence est injoignable — par son seul libellé en clair.
-// "Le CLI reçoit du texte, pas un protocole" (brief W11).
-const MENTION_MARKER_RE =
-  /\[([^\]]+)\]\(cs:\/\/(idea|content)\/([0-9a-fA-F-]{36})\)/g;
+// ---- @références : marqueur POSITIONNEL, indépendant du titre -------------
+// Fix round 1 (revue) : l'ancien format `[titre](cs://idea/<uuid>)` faisait
+// dépendre le pattern du CONTENU du titre — un titre contenant `]` (texte
+// libre, cf. src/lib/ideas.ts, aucune contrainte ; fréquent avec l'ingestion
+// drop-anything qui ramène des titres de pages web) cassait le match, et le
+// fragment `cs://idea/<uuid>)` partait EN CLAIR vers le CLI. Cassait
+// l'invariant "cs:// ne doit jamais atteindre le CLI".
+//
+// Nouveau design : le marqueur inséré dans le textarea est un jeton OPAQUE
+// `@⟦N⟧` (délimiteurs `⟦`/`⟧` = U+27E6/U+27E7, quasi impossibles à produire
+// par un titre normal) — jamais le titre lui-même. La correspondance
+// jeton → {type, id, label} vit dans une table de résolution en état React
+// (`mentionRefs`, ChatDrawerProvider), posée à l'insertion (`selectMention`,
+// `openForContent`). `resolveMessageForCli` résout TOUJOURS par cette table
+// — jamais par un regex qui ré-parse un label. Un titre avec n'importe quel
+// caractère (`]`, `)`, `(`, unicode) ne peut donc plus casser la résolution.
+// Le jeton reste lisible (visible tel quel, "référence numéro N") et
+// effaçable au backspace comme du texte normal.
+const MENTION_TOKEN_RE = /@⟦(\d+)⟧/g;
 const MAX_CONTEXT_CHARS = 2000;
 
-function buildMentionMarker(item: Pick<MentionItem, "type" | "id" | "label">): string {
-  return `[${item.label}](cs://${item.type}/${item.id})`;
+export function buildMentionMarker(token: string): string {
+  return `@⟦${token}⟧`;
 }
 
 function truncateContext(text: string, max = MAX_CONTEXT_CHARS): string {
@@ -37,21 +48,30 @@ function truncateContext(text: string, max = MAX_CONTEXT_CHARS): string {
 }
 
 /**
- * Résout tous les marqueurs `cs://` d'un message AVANT qu'il ne parte en
- * POST : chaque référence unique (idée/contenu) est rechargée via les GET
- * existants, réduite à titre + corps tronqué (~2000 caractères), et posée en
- * bloc de contexte AVANT le texte de l'utilisateur (marqueurs remplacés par
- * leur libellé en clair). Une référence introuvable (supprimée entre-temps,
- * etc.) est simplement ignorée — jamais bloquant pour l'envoi.
+ * Résout tous les jetons `@⟦N⟧` d'un message AVANT qu'il ne parte en POST,
+ * en consultant `refs` (jamais en reparsant le texte du marqueur) : chaque
+ * référence unique — dédoublonnée par (type, id), pas par jeton, pour ne
+ * poser qu'UN bloc de contexte même si la même idée/contenu est référencée
+ * deux fois — est rechargée via les GET existants, réduite à titre + corps
+ * tronqué (~2000 caractères), et posée en bloc de contexte AVANT le texte de
+ * l'utilisateur (jetons remplacés par leur libellé en clair). Un jeton
+ * absent de `refs` (référence supprimée entre-temps, table vidée, etc.) est
+ * simplement retiré du texte — jamais bloquant pour l'envoi, et jamais un
+ * protocole `cs://` en clair : ce protocole n'existe plus dans ce format.
  */
-async function resolveMessageForCli(raw: string): Promise<string> {
-  const matches = [...raw.matchAll(MENTION_MARKER_RE)];
-  const cleaned = raw.replace(MENTION_MARKER_RE, (_m, label: string) => label);
+export async function resolveMessageForCli(
+  raw: string,
+  refs: ReadonlyMap<string, MentionRef>,
+): Promise<string> {
+  const matches = [...raw.matchAll(MENTION_TOKEN_RE)];
+  const cleaned = raw.replace(MENTION_TOKEN_RE, (_m, token: string) => refs.get(token)?.label ?? "");
   if (matches.length === 0) return cleaned;
 
-  const unique = new Map<string, { type: "idea" | "content"; id: string; label: string }>();
-  for (const [, label, type, id] of matches) {
-    unique.set(`${type}:${id}`, { type: type as "idea" | "content", id, label });
+  const unique = new Map<string, MentionRef>();
+  for (const [, token] of matches) {
+    const ref = refs.get(token);
+    if (!ref) continue;
+    unique.set(`${ref.type}:${ref.id}`, ref);
   }
 
   const blocks: string[] = [];
@@ -77,6 +97,32 @@ async function resolveMessageForCli(raw: string): Promise<string> {
 
   if (blocks.length === 0) return cleaned;
   return `${blocks.join("\n\n---\n\n")}\n\n---\n\n${cleaned}`;
+}
+
+/** Jeton déjà posé dans `draft` pour CETTE référence (type+id), s'il existe
+ * encore dans le texte — évite un doublon si l'action d'insertion est
+ * déclenchée deux fois pour la même cible (ex. bouton "💬 Chat" cliqué 2x). */
+function findExistingMentionToken(
+  refs: ReadonlyMap<string, MentionRef>,
+  draft: string,
+  type: MentionRef["type"],
+  id: string,
+): string | null {
+  for (const [token, ref] of refs) {
+    if (ref.type === type && ref.id === id && draft.includes(buildMentionMarker(token))) return token;
+  }
+  return null;
+}
+
+/** Une lane ciblée par un lien externe (révision "Ouvrir la conversation",
+ * favori…) peut avoir été supprimée ou appartenir à un autre workspace : le
+ * drawer ne doit jamais s'ouvrir en silence sur un état vide dans ce cas. */
+export function resolveLaneOpenOutcome(
+  lanes: Pick<Lane, "id">[],
+  laneId: string,
+): { found: true } | { found: false; message: string } {
+  if (lanes.some((l) => l.id === laneId)) return { found: true };
+  return { found: false, message: "Conversation introuvable — elle a peut-être été supprimée." };
 }
 
 // ---- markdown "simple" (brief : pas un vrai parseur CommonMark) -----------
@@ -220,14 +266,34 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionItems, setMentionItems] = useState<MentionItem[] | null>(null);
+  // Table de résolution des jetons `@⟦N⟧` → référence — voir MENTION_TOKEN_RE.
+  const [mentionRefs, setMentionRefs] = useState<Map<string, MentionRef>>(new Map());
+  /** Lien vers une lane introuvable (supprimée, autre workspace) : message
+   * visible au lieu d'un drawer vide muet — voir resolveLaneOpenOutcome. */
+  const [openError, setOpenError] = useState<string | null>(null);
 
   // Miroirs en ref des états lus depuis des callbacks exposées au contexte
   // (openLaneById, openForContent…) — évite les fermetures périmées sans
   // devoir refaire de `fetch` déjà en cours à chaque appel.
   const activeLaneIdRef = useRef<string | null>(null);
   const messagesByLaneRef = useRef<Record<string, ChatMessage[]>>({});
+  // Générateur de jetons monotone — délibérément un ref (pas dans la table
+  // d'état elle-même) : incrémente de façon synchrone y compris si deux
+  // insertions arrivent avant qu'un rendu ne passe, ce qu'un compteur dérivé
+  // de `mentionRefs.size` ne garantirait pas.
+  const nextMentionTokenRef = useRef(1);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const historyRef = useRef<HTMLDivElement | null>(null);
+
+  const registerMentionRef = useCallback((item: Pick<MentionItem, "type" | "id" | "label">): string => {
+    const token = String(nextMentionTokenRef.current++);
+    setMentionRefs((prev) => {
+      const next = new Map(prev);
+      next.set(token, { type: item.type, id: item.id, label: item.label });
+      return next;
+    });
+    return token;
+  }, []);
 
   const loadLanes = useCallback(async (): Promise<Lane[]> => {
     const res = await fetch("/api/lanes");
@@ -285,6 +351,7 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
 
   const openGlobal = useCallback(() => {
     setOpen(true);
+    setOpenError(null);
     loadLanes().then((list) => {
       const keep = activeLaneIdRef.current;
       const target = keep && list.some((l) => l.id === keep) ? keep : (list.at(-1)?.id ?? null);
@@ -294,7 +361,18 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
 
   const openLaneById = useCallback((laneId: string) => {
     setOpen(true);
-    loadLanes().then(() => selectLane(laneId));
+    setOpenError(null);
+    loadLanes().then((list) => {
+      const outcome = resolveLaneOpenOutcome(list, laneId);
+      if (!outcome.found) {
+        // lien périmé (lane supprimée / autre workspace) : jamais un drawer
+        // vide muet — cf. Minor de la revue W11-fix1.
+        setOpenError(outcome.message);
+        selectLane(null);
+        return;
+      }
+      selectLane(laneId);
+    });
   }, [loadLanes, selectLane]);
 
   const openForContent = useCallback(async ({ title, contentId }: { title: string; contentId: string }) => {
@@ -302,10 +380,14 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
     let lane = list.find((l) => l.title === title);
     if (!lane) lane = await createLane(title);
     selectLane(lane.id);
-    const marker = buildMentionMarker({ type: "content", id: contentId, label: title });
-    setDraftByLane((d) => ({ ...d, [lane!.id]: mergeMarkerIntoDraft(d[lane!.id] ?? "", marker) }));
+    const laneId = lane.id;
+    const currentDraft = draftByLane[laneId] ?? "";
+    const existingToken = findExistingMentionToken(mentionRefs, currentDraft, "content", contentId);
+    const token = existingToken ?? registerMentionRef({ type: "content", id: contentId, label: title });
+    const marker = buildMentionMarker(token);
+    setDraftByLane((d) => ({ ...d, [laneId]: mergeMarkerIntoDraft(d[laneId] ?? "", marker) }));
     setOpen(true);
-  }, [loadLanes, createLane, selectLane]);
+  }, [loadLanes, createLane, selectLane, draftByLane, mentionRefs, registerMentionRef]);
 
   const send = useCallback(async () => {
     const laneId = activeLaneIdRef.current;
@@ -318,9 +400,9 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
 
     let resolved: string;
     try {
-      resolved = await resolveMessageForCli(raw);
+      resolved = await resolveMessageForCli(raw, mentionRefs);
     } catch {
-      resolved = raw.replace(MENTION_MARKER_RE, (_m, label: string) => label);
+      resolved = raw.replace(MENTION_TOKEN_RE, (_m, token: string) => mentionRefs.get(token)?.label ?? "");
     }
 
     // bulle optimiste : la route POST persiste le message user en
@@ -361,7 +443,7 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
       return;
     }
     loadLanes();
-  }, [draftByLane, busyByLane, loadLanes]);
+  }, [draftByLane, busyByLane, loadLanes, mentionRefs]);
 
   const ensureMentionItems = useCallback(async (): Promise<MentionItem[]> => {
     if (mentionItems) return mentionItems;
@@ -397,7 +479,8 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
     if (!laneId || !mention) return;
     const value = draftByLane[laneId] ?? "";
     const cursor = mention.start + 1 + mention.query.length;
-    const marker = buildMentionMarker(item);
+    const token = registerMentionRef(item);
+    const marker = buildMentionMarker(token);
     const nextValue = value.slice(0, mention.start) + marker + " " + value.slice(cursor);
     setDraftByLane((d) => ({ ...d, [laneId]: nextValue }));
     setMention(null);
@@ -409,7 +492,7 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
       const pos = mention.start + marker.length + 1;
       el.setSelectionRange(pos, pos);
     });
-  }, [mention, draftByLane]);
+  }, [mention, draftByLane, registerMentionRef]);
 
   function onDraftChange(laneId: string, value: string, cursor: number) {
     setDraftByLane((d) => ({ ...d, [laneId]: value }));
@@ -503,10 +586,14 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
           {/* historique */}
           <div ref={historyRef} className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
             {!activeLaneId ? (
-              <p className="text-sm text-muted">
-                Aucune conversation. Crée-en une avec le bouton{" "}
-                <span className="rounded-full bg-raised px-1.5 py-0.5 text-[10px]">+</span> ci-dessus.
-              </p>
+              openError ? (
+                <p className="text-sm text-danger">{openError}</p>
+              ) : (
+                <p className="text-sm text-muted">
+                  Aucune conversation. Crée-en une avec le bouton{" "}
+                  <span className="rounded-full bg-raised px-1.5 py-0.5 text-[10px]">+</span> ci-dessus.
+                </p>
+              )
             ) : (
               <>
                 {activeMessages.length === 0 && !activeStreaming && (
