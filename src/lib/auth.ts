@@ -35,6 +35,38 @@ export const auth = betterAuth({
         // de créer le tout premier compte (owner) après avoir posé la var
         // d'env avant le premier démarrage. Un `select ... limit 1` (pas un
         // count) : coûte pareil dès le 2e user, jamais plus.
+        //
+        // LIMITE CONNUE (revue finale, vague cockpit) — course TOCTOU sur le
+        // bootstrap : deux tout premiers signups strictement simultanés sur
+        // une base vide peuvent tous les deux lire `existing = undefined`
+        // avant qu'aucun des deux INSERT n'ait committé, et donc tous les
+        // deux passer pour "owner". Volontairement NON corrigé par un verrou
+        // ici, pour une raison précise et vérifiée dans le code de
+        // better-auth (pas une supposition) :
+        //   - ce hook `before` tourne AVANT le `create()` de l'adapter, mais
+        //     PAS dans la même transaction DB que lui par défaut — et même
+        //     en passant `transaction: true` à drizzleAdapter (ce qui n'est
+        //     PAS fait ici), better-auth exécute ce before() avec le `tx`
+        //     interne accessible seulement via son AsyncLocalStorage
+        //     (`@better-auth/core/context`, `getCurrentAdapter()`) : ce
+        //     `db` importé ici en haut de fichier reste la connexion pool
+        //     top-level, hors de ce contexte. `pg_advisory_xact_lock` posé
+        //     ici se relâcherait de toute façon à la fin de la micro-requête
+        //     de lecture, bien AVANT l'INSERT réel — donc inutile tel quel.
+        //   - un verrou SESSION (`pg_advisory_lock`/`unlock`) qui tiendrait
+        //     de before() à after() exigerait de réserver une connexion
+        //     dédiée hors du pool (`postgres.reserve()`) et de la faire
+        //     survivre entre deux callbacks déconnectés (before/after, avec
+        //     l'INSERT de better-auth entre les deux) via un état partagé
+        //     ad hoc — fragile, et un verrou qui ne se relâche pas sur un
+        //     chemin d'erreur bloquerait TOUT signup futur, un pire risque
+        //     que la course qu'il corrige.
+        // Best-effort déjà en place : le bind par défaut est loopback
+        // (127.0.0.1), donc en pratique cette fenêtre n'est atteignable que
+        // depuis la machine elle-même — pas depuis Internet. Un vrai fix
+        // demanderait de faire tourner ce check DANS la transaction de
+        // création de better-auth (contrôle qu'on n'a pas sans patcher ses
+        // internes), pas un raccourci ajouté ici.
         before: async () => {
           const [existing] = await db.select({ id: schema.user.id }).from(schema.user).limit(1);
           if (isSignupBlocked(process.env.DISABLE_SIGNUP, !!existing)) {

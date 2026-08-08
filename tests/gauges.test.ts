@@ -361,6 +361,27 @@ describe("createGaugeSource — validation + SSRF", () => {
       createGaugeSource(ws.workspaceId, { name: "", url: "https://example.com", kind: "quota" })
     ).rejects.toThrow(/name/);
   });
+
+  // Durcissement (re-review de la vague finale) : POST /api/gauges (création
+  // d'une source) renvoyait `NextResponse.json(source)` — la ligne brute de
+  // createGaugeSource, headers en clair inclus — alors que GET et PATCH
+  // étaient déjà redigés via redactHeadersForClient. 3e chemin de fuite,
+  // même contrat que celui documenté sur updateGaugeSource ci-dessous : la
+  // route applique désormais redactHeadersForClient à la réponse. Comme pour
+  // PATCH, testé au niveau lib (le plus proche possible de la route dans ce
+  // repo) plutôt qu'en appelant le handler Next.js directement.
+  it("redactHeadersForClient appliqué à la ligne createGaugeSource (route POST) : plus de valeur de header, seulement la clé", async () => {
+    const ws = await signUpTestUser();
+    const created = await createGaugeSource(ws.workspaceId, {
+      name: "Bridge", url: "https://example.com", kind: "quota",
+      headers: { "x-api-key": "secret-jamais-renvoye-au-post" },
+    });
+    const redacted = redactHeadersForClient(created);
+
+    expect(redacted).not.toHaveProperty("headers");
+    expect(redacted.headerKeys).toEqual(["x-api-key"]);
+    expect(JSON.stringify(redacted)).not.toContain("secret-jamais-renvoye-au-post");
+  });
 });
 
 describe("listGaugeSources / getGaugeSource / updateGaugeSource / deleteGaugeSource — cloisonnement", () => {

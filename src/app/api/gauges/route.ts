@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireWorkspace, TenantError } from "@/lib/tenant";
-import { createGaugeSource, getGaugesState } from "@/lib/gauges";
+import { createGaugeSource, getGaugesState, redactHeadersForClient } from "@/lib/gauges";
 
 const KINDS = ["quota", "cost"] as const;
 
@@ -34,7 +34,13 @@ export async function POST(req: NextRequest) {
       headers: body.headers,
       kind: body.kind as "quota" | "cost",
     });
-    return NextResponse.json(source);
+    // Même durcissement que GET (getGaugesState) et PATCH /api/gauges/[id] :
+    // createGaugeSource renvoie la ligne insérée telle quelle, headers en
+    // clair inclus (c'est là que vit un x-api-key) — la réponse au client
+    // doit passer par redactHeadersForClient, sinon la création fuit
+    // exactement ce que GET/PATCH protègent déjà. Voir redactHeadersForClient
+    // dans gauges.ts.
+    return NextResponse.json(redactHeadersForClient(source));
   } catch (e) {
     if (e instanceof TenantError) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (e instanceof Error) return NextResponse.json({ error: e.message }, { status: 400 });
