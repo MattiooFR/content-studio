@@ -16,12 +16,26 @@ import { GET as messagesGET, POST as messagesPOST } from "@/app/api/lanes/[id]/m
 
 const FAKE_CLI = path.join(process.cwd(), "tests/fixtures/fake-cli.sh");
 const FAKE_CLI_FAIL = `FAKE_CLI_FAIL=1 ${FAKE_CLI}`;
+const FAKE_CLI_HANG = `FAKE_CLI_HANG=1 ${FAKE_CLI}`;
+const FAKE_CLI_BIG_OUTPUT = `FAKE_CLI_BIG_OUTPUT=1 ${FAKE_CLI}`;
 
 async function fixture(command = FAKE_CLI) {
   const ws = await signUpTestUser();
   await setLaneCommand(ws.workspaceId, command);
   const lane = await createLane(ws.workspaceId, { title: "Conversation test" });
   return { ...ws, lane };
+}
+
+/**
+ * Extrait le tableau argv EXACT que la fixture a reçu (chunk "argv-json:
+ * [...]"). Permet d'asserter la position PRÉCISE de chaque token — pas
+ * juste sa présence quelque part dans le texte concaténé — notamment celle
+ * du séparateur "--" par rapport au message utilisateur.
+ */
+function parseArgv(chunkTexts: string[]): string[] {
+  const argvChunk = chunkTexts.find((t) => t.startsWith("argv-json: "));
+  if (!argvChunk) throw new Error("chunk argv-json introuvable dans " + JSON.stringify(chunkTexts));
+  return JSON.parse(argvChunk.slice("argv-json: ".length));
 }
 
 describe("createLane / listLanes / getLane", () => {
@@ -88,7 +102,9 @@ describe("runLaneMessage — cycle message → chunks → done", () => {
     // au moins les 2 chunks de la fixture + le done, dans l'ordre.
     const chunkTexts = events.filter((e) => e.type === "chunk").map((e) => (e as { text: string }).text);
     expect(chunkTexts.length).toBe(2);
-    expect(chunkTexts.join("")).toContain("args-recus:");
+    // argv exact reçu par le CLI factice : "--" puis le message, jamais de
+    // --resume au 1er message (pas encore de cliSessionId sur la lane).
+    expect(parseArgv(chunkTexts)).toEqual(["--", "Bonjour, présente-toi."]);
     expect(chunkTexts.join("")).toContain("fin-fake-cli");
     expect(events.at(-1)).toEqual({ type: "done" });
 
@@ -121,7 +137,7 @@ describe("runLaneMessage — cycle message → chunks → done", () => {
     });
   });
 
-  it("--resume <cliSessionId> transmis au 2e message (prouvé par l'écho de la fixture)", async () => {
+  it("--resume <cliSessionId> transmis au 2e message, avec le séparateur -- entre les options et le message (prouvé par l'argv exact échoué par la fixture)", async () => {
     const f = await fixture();
 
     await runLaneMessage({ workspaceId: f.workspaceId, laneId: f.lane.id, userMessage: "premier message" });
@@ -135,13 +151,13 @@ describe("runLaneMessage — cycle message → chunks → done", () => {
       onEvent: (e) => events.push(e),
     });
 
-    const text = events.filter((e) => e.type === "chunk").map((e) => (e as { text: string }).text).join("");
-    expect(text).toContain("--resume");
-    expect(text).toContain("fake-session-fixed-001");
-    expect(text).toContain("deuxieme message");
+    const chunkTexts = events.filter((e) => e.type === "chunk").map((e) => (e as { text: string }).text);
+    expect(parseArgv(chunkTexts)).toEqual([
+      "--resume", "fake-session-fixed-001", "--", "deuxieme message",
+    ]);
   });
 
-  it("1er message (sans session) : pas de --resume dans les args reçus par le CLI", async () => {
+  it("1er message (sans session) : pas de --resume, argv = [\"--\", message]", async () => {
     const f = await fixture();
     const events: LaneRunEvent[] = [];
     await runLaneMessage({
@@ -149,8 +165,27 @@ describe("runLaneMessage — cycle message → chunks → done", () => {
       userMessage: "premier message tout court",
       onEvent: (e) => events.push(e),
     });
-    const text = events.filter((e) => e.type === "chunk").map((e) => (e as { text: string }).text).join("");
-    expect(text).not.toContain("--resume");
+    const chunkTexts = events.filter((e) => e.type === "chunk").map((e) => (e as { text: string }).text);
+    expect(parseArgv(chunkTexts)).toEqual(["--", "premier message tout court"]);
+  });
+
+  it("un message en forme de flag (ex. --dangerously-skip-permissions) reste un argument POSITIONNEL après --, jamais une option (preuve du Critical fermé)", async () => {
+    const f = await fixture();
+    const events: LaneRunEvent[] = [];
+    await runLaneMessage({
+      workspaceId: f.workspaceId, laneId: f.lane.id,
+      userMessage: "--dangerously-skip-permissions",
+      onEvent: (e) => events.push(e),
+    });
+    const chunkTexts = events.filter((e) => e.type === "chunk").map((e) => (e as { text: string }).text);
+    const argv = parseArgv(chunkTexts);
+    // "--" est le seul token AVANT le message : le token en forme de flag
+    // arrive juste après lui, en position positionnelle du "$@" transmis au
+    // CLI cible — jamais en position 0, là où un parseur d'arguments
+    // (commander.js et consorts) le lirait comme une option.
+    expect(argv).toEqual(["--", "--dangerously-skip-permissions"]);
+    expect(argv.indexOf("--")).toBe(0);
+    expect(argv.indexOf("--dangerously-skip-permissions")).toBe(1);
   });
 });
 
@@ -175,6 +210,80 @@ describe("runLaneMessage — FAKE_CLI_FAIL : exit ≠ 0", () => {
 
     const lane = await getLane(f.workspaceId, f.lane.id);
     expect(lane?.status).toBe("error");
+  });
+});
+
+// IMPORTANT : ces deux describe spawnent un CLI factice qui, sans
+// intervention, dort 600 s réelles (FAKE_CLI_HANG) ou crache ~3 Mio
+// (FAKE_CLI_BIG_OUTPUT). On injecte TOUJOURS timeoutMs/killGraceMs courts —
+// jamais les valeurs par défaut du module (120 s / 5 s) — pour ne jamais
+// laisser un test réel bloqué sur un sleep long.
+describe("runLaneMessage — FAKE_CLI_HANG : timeout dur, kill de l'arbre, verrou relâché", () => {
+  it("dépassement du timeout → status error + message system 'timeout', et le verrou est bien relâché (2e message pas de LaneBusyError/409)", async () => {
+    const f = await fixture(FAKE_CLI_HANG);
+    const events: LaneRunEvent[] = [];
+
+    await runLaneMessage({
+      workspaceId: f.workspaceId, laneId: f.lane.id,
+      userMessage: "tu vas te bloquer 600 secondes",
+      onEvent: (e) => events.push(e),
+      timeoutMs: 200,
+      killGraceMs: 50,
+    });
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent as { message: string }).message).toMatch(/timeout/);
+
+    const messages = await getLaneMessages(f.workspaceId, f.lane.id);
+    expect(messages!.map((m) => m.role)).toEqual(["user", "system"]);
+    expect(messages![1].body).toMatch(/timeout/);
+
+    const lane = await getLane(f.workspaceId, f.lane.id);
+    expect(lane?.status).toBe("error");
+
+    // Preuve directe : le Set runningLanes ne contient plus cette lane
+    // (le finally de runLaneMessage s'est bien exécuté après le kill).
+    expect(isLaneBusy(f.lane.id)).toBe(false);
+
+    // Preuve comportementale : un nouveau message sur la MÊME lane doit
+    // pouvoir démarrer sans rejeter avec LaneBusyError (donc sans 409 côté
+    // route HTTP). On repointe laneCommand sur la fixture normale pour ne
+    // pas rebloquer 600 s — le point testé ici est le verrou, pas un 2e
+    // timeout.
+    await setLaneCommand(f.workspaceId, FAKE_CLI);
+    await expect(
+      runLaneMessage({
+        workspaceId: f.workspaceId, laneId: f.lane.id,
+        userMessage: "second message, le verrou doit être libre",
+      })
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("runLaneMessage — FAKE_CLI_BIG_OUTPUT : cap stdout anti-DoS", () => {
+  it("un flux stdout qui dépasse MAX_OUTPUT_BYTES est interrompu avant la fin, status error", async () => {
+    const f = await fixture(FAKE_CLI_BIG_OUTPUT);
+    const events: LaneRunEvent[] = [];
+
+    await runLaneMessage({
+      workspaceId: f.workspaceId, laneId: f.lane.id,
+      userMessage: "envoie-moi un pavé de 3 Mio",
+      onEvent: (e) => events.push(e),
+      killGraceMs: 50,
+    });
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent as { message: string }).message).toMatch(/volumineuse/);
+
+    const messages = await getLaneMessages(f.workspaceId, f.lane.id);
+    expect(messages!.map((m) => m.role)).toEqual(["user", "system"]);
+    expect(messages![1].body).toMatch(/volumineuse/);
+
+    const lane = await getLane(f.workspaceId, f.lane.id);
+    expect(lane?.status).toBe("error");
+    expect(isLaneBusy(f.lane.id)).toBe(false);
   });
 });
 

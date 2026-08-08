@@ -2,22 +2,35 @@
 # tests/fixtures/fake-cli.sh
 #
 # CLI factice pour tester src/lib/lane-runner.ts SANS jamais invoquer un
-# vrai agent (AUCUN vrai CLI dans les tests). Émet du stream-json
-# déterministe, une ligne JSON par événement :
+# vrai agent (AUCUN vrai CLI dans les tests).
 #
-#   1. system/init avec un session_id FIXE — le runner doit le persister
-#      sur la lane.
-#   2. assistant : "args-recus: <tous les argv reçus par ce script>" — les
-#      tests lisent ce texte pour prouver que --resume <cliSessionId> est
-#      bien transmis au 2e message d'une lane.
-#   3. assistant : un second chunk, pour vérifier l'accumulation des
-#      chunks en un seul message agent.
+# Comportement par défaut : émet du stream-json déterministe, une ligne
+# JSON par événement :
+#   1. system/init avec un session_id FIXE — le runner doit le persister.
+#   2. assistant : "argv-json: [...]" — un tableau JSON EXACT de tous les
+#      argv reçus par ce script (échappés minimalement). Permet aux tests
+#      d'asserter la position PRÉCISE de "--" et des tokens autour : preuve
+#      que --resume est bien transmis, ET que "--" précède toujours le
+#      message (jamais l'inverse — sinon un message qui ressemble à un
+#      flag serait lu comme une option par le CLI cible).
+#   3. assistant : un second chunk, pour vérifier l'accumulation.
 #   4. exit 0.
 #
-# FAKE_CLI_FAIL=1 (positionnée dans workspace_settings.laneCommand, ex.
-# "FAKE_CLI_FAIL=1 /chemin/vers/fake-cli.sh") : simule un crash — émet
-# quand même l'init, écrit sur stderr, puis exit 1. Teste le chemin
-# d'erreur du runner (message system + status error).
+# Variantes (toutes lues depuis l'environnement, jamais depuis les argv —
+# c'est workspace_settings.laneCommand qui les positionne, ex.
+# "FAKE_CLI_HANG=1 /chemin/fake-cli.sh") :
+#   FAKE_CLI_FAIL=1        → exit 1 après l'init (chemin d'erreur).
+#   FAKE_CLI_HANG=1        → dort 600 s après l'init (teste le timeout dur
+#                            du runner + le kill de l'arbre + la
+#                            libération du verrou).
+#   FAKE_CLI_BIG_OUTPUT=1  → émet un unique chunk de ~3 MiB (teste le cap
+#                            stdout du runner, qui doit couper avant la fin).
+
+if [ "${FAKE_CLI_HANG:-}" = "1" ]; then
+  printf '{"type":"system","subtype":"init","session_id":"fake-session-hang"}\n'
+  sleep 600
+  exit 0
+fi
 
 if [ "${FAKE_CLI_FAIL:-}" = "1" ]; then
   printf '{"type":"system","subtype":"init","session_id":"fake-session-fail"}\n'
@@ -25,7 +38,36 @@ if [ "${FAKE_CLI_FAIL:-}" = "1" ]; then
   exit 1
 fi
 
+if [ "${FAKE_CLI_BIG_OUTPUT:-}" = "1" ]; then
+  printf '{"type":"system","subtype":"init","session_id":"fake-session-big"}\n'
+  big=$(head -c 3000000 /dev/zero | tr '\0' 'a')
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}\n' "$big"
+  exit 0
+fi
+
 printf '{"type":"system","subtype":"init","session_id":"fake-session-fixed-001"}\n'
-printf '{"type":"assistant","message":{"content":[{"type":"text","text":"args-recus: %s"}]}}\n' "$*"
+
+# Reconstruit un tableau JSON EXACT de "$@" (échappe juste \ et " — suffit
+# pour les messages de test, ce script n'a pas vocation à être un
+# encodeur JSON général).
+argv_json="["
+first=1
+for a in "$@"; do
+  if [ "$first" -eq 0 ]; then argv_json="${argv_json},"; fi
+  esc=$(printf '%s' "$a" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  argv_json="${argv_json}\"${esc}\""
+  first=0
+done
+argv_json="${argv_json}]"
+
+# argv_json est lui-même un morceau de JSON (des guillemets dedans) qu'on
+# embarque comme VALEUR d'un champ JSON "text" — il faut donc l'échapper
+# une 2e fois (\ puis ") pour ce niveau d'imbrication, sinon ses guillemets
+# internes cassent la chaîne "text" englobante et la ligne entière devient
+# du JSON invalide (silencieusement avalée par le parseur tolérant du
+# runner : le bug réel qui a fait disparaître ce chunk avant ce fix).
+argv_json_escaped=$(printf '%s' "$argv_json" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"argv-json: %s"}]}}\n' "$argv_json_escaped"
 printf '{"type":"assistant","message":{"content":[{"type":"text","text":" | fin-fake-cli"}]}}\n'
 exit 0
