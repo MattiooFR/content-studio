@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channels, artDirections } from "@/lib/db/schema";
 import { resolveMcpToken } from "@/lib/tenant";
-import { listIdeas, getIdea } from "@/lib/ideas";
+import { listIdeas, getIdea, createIdea } from "@/lib/ideas";
 import { listPersonas } from "@/lib/personas";
 import {
   createContentDraft, getContent, applyContentUpdate, listContents,
@@ -48,6 +48,23 @@ const handler = createMcpHandler(
         inputSchema: { status: z.enum(["inbox", "in_progress", "done", "archived"]).optional() },
       },
       async ({ status }, extra) => json(await listIdeas(wsOf(extra), status))
+    );
+
+    server.registerTool(
+      "create_idea",
+      {
+        description: "Dépose une nouvelle idée dans l'inbox du workspace (statut inbox). Pour quand l'idée arrive par l'agent — dictée, veille, brief oral — et pas par l'UI. Rend l'idée créée, avec son id à passer ensuite à create_content_draft.",
+        inputSchema: {
+          title: z.string().trim().min(1, "titre requis"),
+          notes: z.string().optional(),
+          source_url: z.string().url().optional(),
+          tags: z.array(z.string()).optional(),
+        },
+      },
+      async ({ title, notes, source_url, tags }, extra) =>
+        json(await createIdea(wsOf(extra), {
+          title, notes, sourceUrl: source_url, tags,
+        }))
     );
 
     server.registerTool(
