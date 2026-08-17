@@ -226,7 +226,14 @@ const authed = withMcpAuth(
   handler,
   async (_req, bearer) => {
     const resolved = await resolveMcpToken(bearer ? `Bearer ${bearer}` : null);
-    if (!resolved) return undefined; // → 401
+    if (!resolved) {
+      // Deux 401 distincts. `undefined` fait dire à mcp-handler « No
+      // authorization provided » — faux si un Bearer était là, juste invalide,
+      // et trompeur pour qui débogue son branchement. Lever fait passer la lib
+      // par son autre chemin, qui répond « Invalid token ».
+      if (bearer) throw new Error("token inconnu ou révoqué");
+      return undefined; // vraiment aucun token → 401 « No authorization provided »
+    }
     return {
       token: bearer ?? "",
       clientId: resolved.workspaceId,

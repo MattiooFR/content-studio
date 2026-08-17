@@ -26,4 +26,20 @@ describe("MCP — auth", () => {
     const res = await POST(mcpRequest({ authorization: "Bearer cs_deadbeef" }));
     expect(res.status).toBe(401);
   });
+
+  // Les deux 401 doivent se distinguer : « pas de token » et « token invalide »
+  // sont deux erreurs de branchement différentes côté client, et le même
+  // message pour les deux fait perdre du temps à qui débogue son Bearer.
+  it("sans token → le message dit qu'aucune autorisation n'a été fournie", async () => {
+    const res = await POST(mcpRequest());
+    const corps = await res.json();
+    expect(corps.error_description).toMatch(/no authorization/i);
+  });
+
+  it("token bidon → le message dit que le token est invalide, pas qu'il est absent", async () => {
+    const res = await POST(mcpRequest({ authorization: "Bearer cs_deadbeef" }));
+    const corps = await res.json();
+    expect(corps.error_description).not.toMatch(/no authorization/i);
+    expect(corps.error_description).toMatch(/invalid/i);
+  });
 });
