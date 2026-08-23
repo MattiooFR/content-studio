@@ -176,8 +176,21 @@ export async function completeJob(workspaceId: string, id: string, result: Recor
 
 export async function failJob(workspaceId: string, id: string, error: string): Promise<Job | null> {
   const message = (error || "échec sans message").slice(0, MAX_JOB_ERROR_LENGTH);
-  return finish(workspaceId, id, { status: "failed", error: message });
-  // Effets d'échec des kinds intégrés (sync → publication.last_error, transcribe → commentaire) : Tasks 7 et 12.
+  const row = await finish(workspaceId, id, { status: "failed", error: message });
+  if (row) await applyFailureEffects(row, message);
+  return row;
+}
+
+/** Effets d'échec des kinds intégrés (spec §1.4 / §2.2). */
+async function applyFailureEffects(job: Job, message: string) {
+  const payload = job.payload as Record<string, unknown>;
+  if (job.kind === "sync" && typeof payload.publication_id === "string") {
+    // Import dynamique : publications.ts importe jobs.ts pour createJob —
+    // un import statique inverse ferait un cycle au chargement des modules.
+    const { setPublicationError } = await import("@/lib/publications");
+    await setPublicationError(job.workspaceId, payload.publication_id, message);
+  }
+  // transcribe → commentaire : Task 12.
 }
 
 export async function retryJob(workspaceId: string, id: string): Promise<Job | null> {

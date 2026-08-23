@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { contents, contentRevisions, channels, ideas, personas } from "@/lib/db/schema";
 import { bus } from "@/lib/events";
 import { getLane } from "@/lib/lanes";
+import { enqueueSyncIfStale } from "@/lib/publications";
 
 export async function createContentDraft(p: {
   workspaceId: string; ideaId: string; channelKey: string; personaId?: string;
@@ -73,6 +74,9 @@ export async function applyContentUpdate(p: {
     return { revisionId: rev.id, state: (proposed ? "proposed" : "current") as "current" | "proposed" };
   });
   bus.publish(p.workspaceId, { type: "content.updated", contentId: p.contentId, ...result });
+  // Révision devenue courante sur un contenu déjà publié quelque part : job sync
+  // (spec §2.3). Jamais pour une proposed — result.state le garantit ici.
+  if (result.state === "current") await enqueueSyncIfStale(p.workspaceId, p.contentId, p.body);
   return result;
 }
 
@@ -133,6 +137,10 @@ export async function resolveProposed(p: {
     type: "content.updated", contentId: p.contentId,
     revisionId: p.revisionId, state: "current",
   });
+  // Même hook que applyContentUpdate : la proposition acceptée devient le
+  // corps courant, donc les publications existantes peuvent être en retard.
+  const [fresh] = await db.select({ body: contents.body }).from(contents).where(eq(contents.id, p.contentId));
+  if (fresh) await enqueueSyncIfStale(p.workspaceId, p.contentId, fresh.body);
 }
 
 export async function setContentStatus(
