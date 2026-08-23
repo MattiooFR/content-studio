@@ -4,36 +4,41 @@ import { useJobs } from "@/hooks/use-jobs";
 import type { CommentRow } from "@/components/review/use-comments";
 
 /**
- * Relance d'une transcription échouée (spec §3.4). Le job `transcribe` porte
- * l'audio, conservé en base tant que la transcription n'a pas abouti : le
- * réessai repart donc du même enregistrement, il n'y a rien à redicter.
+ * Relance d'une transcription échouée (spec §3.4), ou bloquée : le job
+ * `transcribe` est passé `done` mais l'effet post-complétion (écrire le
+ * commentaire, purger l'audio) a échoué en route — le commentaire reste
+ * `pending` pour toujours sinon. Dans ce second cas, `retry_job` refuse
+ * (transition failed → queued uniquement) : on crée un NOUVEAU job
+ * `transcribe` sur le même commentaire — l'audio n'est purgé qu'au succès de
+ * `applyTranscription`, donc il est toujours là pour ce nouveau job.
  *
- * Monté UNIQUEMENT sur une carte dont la transcription a échoué — chaque
- * instance ouvre un `useJobs`, donc un abonnement aux événements ; c'est sans
- * conséquence depuis que la connexion SSE est partagée (voir
- * `use-workspace-events.ts`).
+ * Monté sur une carte dont la transcription a échoué OU est encore en
+ * attente (le second cas couvre aussi bien une dictée normalement en cours
+ * que le cas bloqué ci-dessus) — chaque instance ouvre un `useJobs`, donc un
+ * abonnement aux événements ; c'est sans conséquence depuis que la connexion
+ * SSE est partagée (voir `use-workspace-events.ts`).
  */
-function RetryTranscription({ commentId }: { commentId: string }) {
+function RetryTranscription({ commentId, transcription }: {
+  commentId: string; transcription: CommentRow["transcription"];
+}) {
   const jobs = useJobs("comment", commentId);
   const job = jobs.latest("transcribe");
   // Aucun job retrouvé (purgé, ou dictée dont le job n'a jamais pu être créé)
   // : rien à relancer, on n'affiche pas de bouton qui ne marcherait pas.
   if (!job) return null;
-  const running = job.status === "queued" || job.status === "running";
-  if (!running && job.status !== "failed") return null;
+  // Masqué tant que ça tourne (queued/running) : ni bouton, ni affordance —
+  // qu'il s'agisse d'une première dictée ou d'une relance, rien à faire ici
+  // tant que le job n'a pas conclu.
+  if (job.status === "queued" || job.status === "running") return null;
+  const stuck = job.status === "done" && transcription !== "done";
+  if (job.status !== "failed" && !stuck) return null;
+  const onRetry = () => (job.status === "failed" ? jobs.retry(job.id) : jobs.create("transcribe"));
   return (
     <div className="border-t border-line px-2 py-1.5">
-      {running ? (
-        // le bouton disparaît pendant la relance, mais on garde un retour
-        // visible : la carte, elle, affiche encore « transcription échouée »
-        // jusqu'à ce que le worker aboutisse
-        <span className="text-[10px] tracking-wider text-muted uppercase">Nouvelle transcription…</span>
-      ) : (
-        <button type="button" onClick={() => jobs.retry(job.id)}
-          className="rounded-full border border-line bg-raised px-2 py-0.5 text-[10px] font-medium tracking-wider text-muted uppercase transition-colors duration-150 hover:border-line-strong hover:text-ink">
-          Réessayer
-        </button>
-      )}
+      <button type="button" onClick={onRetry}
+        className="rounded-full border border-line bg-raised px-2 py-0.5 text-[10px] font-medium tracking-wider text-muted uppercase transition-colors duration-150 hover:border-line-strong hover:text-ink">
+        Réessayer
+      </button>
       {jobs.error && <span className="ml-2 text-[10px] text-danger">{jobs.error}</span>}
     </div>
   );
@@ -70,7 +75,8 @@ function CommentCard({ c, lost, onSelect }: {
           {c.quote && lost && <span className="text-warning">⚠️ passage introuvable</span>}
         </span>
       </button>
-      {c.transcription === "failed" && <RetryTranscription commentId={c.id} />}
+      {(c.transcription === "failed" || c.transcription === "pending") &&
+        <RetryTranscription commentId={c.id} transcription={c.transcription} />}
     </div>
   );
 }

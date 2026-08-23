@@ -5,7 +5,7 @@ import { POST as retryRoute } from "@/app/api/jobs/[id]/retry/route";
 import { POST as cancelRoute } from "@/app/api/jobs/[id]/cancel/route";
 import { createIdea, getIdea } from "@/lib/ideas";
 import { createContentDraft, applyContentUpdate, getContent } from "@/lib/contents";
-import { claimJob, failJob } from "@/lib/jobs";
+import { claimJob, failJob, listJobs } from "@/lib/jobs";
 
 const jsonInit = (body: unknown) => ({
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
@@ -36,6 +36,20 @@ describe("routes /api/jobs", () => {
     })));
     expect(r2.status).toBe(200);
     expect((await r2.json()).created).toBe(false);
+  });
+
+  it("payload.dedupe_key fourni par l'appelant ne défait pas l'unicité (Finding, review finale)", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "À rédiger" });
+    const body = { kind: "write", target_type: "idea", target_id: idea.id, payload: { channel_key: "community", dedupe_key: "x" } };
+    const r1 = await createRoute(await authedReq(ws, "/api/jobs", jsonInit(body)));
+    expect(r1.status).toBe(201);
+    const r2 = await createRoute(await authedReq(ws, "/api/jobs", jsonInit(body)));
+    expect(r2.status).toBe(200);
+    expect((await r2.json()).created).toBe(false);
+    const jobs = await listJobs(ws.workspaceId, { targetType: "idea", targetId: idea.id, kind: "write" });
+    expect(jobs).toHaveLength(1);
+    expect((jobs[0].payload as Record<string, unknown>).dedupe_key ?? "").toBe("");
   });
 
   it("POST write sans channel_key → 400 ; cible d'un autre workspace → 404", async () => {

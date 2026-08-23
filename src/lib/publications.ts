@@ -30,16 +30,22 @@ export async function linkPublication(workspaceId: string, input: {
   if (!target) throw new Error("target requis");
   if (!input.externalId.trim()) throw new Error("external_id requis");
   const now = new Date();
+  // Re-lien (ex. sync worker qui ne repasse pas url/meta) : ne réécrit url/meta
+  // que si le worker les a explicitement fournis cette fois-ci, sinon les
+  // valeurs déjà stockées seraient effacées par "" / {} (Finding, review finale).
+  const set: Partial<typeof publications.$inferInsert> = {
+    externalId: input.externalId, publishedBodyHash: input.bodyHash,
+    syncedAt: now, lastError: null, updatedAt: now,
+  };
+  if (input.url !== undefined) set.url = input.url;
+  if (input.meta !== undefined) set.meta = input.meta;
   const [row] = await db.insert(publications).values({
     workspaceId, contentId: input.contentId, target, externalId: input.externalId,
     url: input.url ?? "", meta: input.meta ?? {}, publishedBodyHash: input.bodyHash,
     publishedAt: now, syncedAt: now, lastError: null,
   }).onConflictDoUpdate({
     target: [publications.contentId, publications.target],
-    set: {
-      externalId: input.externalId, url: input.url ?? "", meta: input.meta ?? {},
-      publishedBodyHash: input.bodyHash, syncedAt: now, lastError: null, updatedAt: now,
-    },
+    set,
   }).returning();
   return row;
 }

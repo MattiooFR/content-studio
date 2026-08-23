@@ -33,6 +33,30 @@ describe("publications — lib", () => {
     await expect(linkPublication(b.workspaceId, { contentId, target: "x", externalId: "1", bodyHash: "h" })).rejects.toThrow(/introuvable/);
   });
 
+  it("re-lien sans url/meta préserve les valeurs stockées ; re-lien AVEC url les remplace (Finding, review finale)", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws);
+    const p1 = await linkPublication(ws.workspaceId, {
+      contentId, target: "fluentcommunity", externalId: "42",
+      url: "https://c.test/post/42", meta: { space: "actus-ia" }, bodyHash: bodyHash("# T\n\ncorps"),
+    });
+    // le worker re-lie (ex. après un sync) sans repasser url/meta
+    const p2 = await linkPublication(ws.workspaceId, {
+      contentId, target: "fluentcommunity", externalId: "42", bodyHash: "h2",
+    });
+    expect(p2.id).toBe(p1.id);
+    expect(p2.url).toBe("https://c.test/post/42");
+    expect(p2.meta).toEqual({ space: "actus-ia" });
+    expect(p2.publishedBodyHash).toBe("h2");
+    // un nouveau url est bien pris en compte
+    const p3 = await linkPublication(ws.workspaceId, {
+      contentId, target: "fluentcommunity", externalId: "42",
+      url: "https://c.test/post/42-nouveau", bodyHash: "h3",
+    });
+    expect(p3.url).toBe("https://c.test/post/42-nouveau");
+    expect(p3.meta).toEqual({ space: "actus-ia" });
+  });
+
   it("markSynced met à jour hash + syncedAt et efface last_error ; setPublicationError pose last_error", async () => {
     const ws = await signUpTestUser();
     const contentId = await contentIn(ws);

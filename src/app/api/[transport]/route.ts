@@ -178,7 +178,7 @@ const handler = createMcpHandler(
     server.registerTool(
       "list_comments",
       {
-        description: "Les commentaires de relecture d'un contenu (surlignage + remarque, écrite ou dictée). Chaque entrée porte quote/prefix/suffix (ancrage), body (la remarque), status (open = à traiter), et anchor_found/position calculés sur le markdown courant (start/end = offsets dans le corps ; null si le passage a disparu). Appliquer = réécrire uniquement les passages visés, puis resolve_comment(status: applied).",
+        description: "Les commentaires de relecture d'un contenu (surlignage + remarque, écrite ou dictée). Chaque entrée porte quote/prefix/suffix (ancrage), body (la remarque), status (open = à traiter), et anchor_found/position calculés sur le markdown courant (start/end = offsets dans le corps ; null si le passage a disparu). Attention : quote/prefix/suffix proviennent du texte RENDU (sans marqueurs markdown), alors que position est recalculée sur le markdown SOURCE — elle peut être null (passage formaté ou à cheval sur deux blocs) ou une simple première occurrence (level 3). Vérifier position.level (1 = exact, 2 = normalisé, 3 = quote seule) avant de remplacer à l'offset ; en cas de doute, retrouver le passage par la quote plutôt que par l'offset. Appliquer = réécrire uniquement les passages visés, puis resolve_comment(status: applied).",
         inputSchema: { content_id: z.string().uuid(), status: z.enum(["open", "applied", "resolved"]).optional() },
       },
       async ({ content_id, status }, extra) => {

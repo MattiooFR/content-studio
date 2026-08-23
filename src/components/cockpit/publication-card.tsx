@@ -3,13 +3,27 @@ import { useCallback, useEffect, useState } from "react";
 import { SectionCard } from "@/components/cockpit/section-card";
 import { JobStatus } from "@/components/cockpit/job-status";
 import { Button } from "@/components/ui/button";
-import { useJobs } from "@/hooks/use-jobs";
+import { useJobs, type JobRow } from "@/hooks/use-jobs";
 import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 
 type Pub = {
   id: string; target: string; externalId: string; url: string; syncedAt: string | null;
   publishedAt: string | null; lastError: string | null; stale: boolean;
 };
+
+/**
+ * Gating PAR publication (spec §2.4) : plusieurs publications désynchronisées
+ * du même contenu ont chacune leur job `sync` (dedupe_key = publication_id,
+ * voir enqueueSyncIfStale) — un job actif sur l'une ne doit pas masquer le
+ * bouton des autres. On identifie donc « le » sync de p via son payload, pas
+ * via `jobs.latest("sync")` qui ne rend que le plus récent tous confondus.
+ */
+function hasActiveSync(jobs: JobRow[], publicationId: string): boolean {
+  return jobs.some((j) =>
+    j.kind === "sync" && (j.status === "queued" || j.status === "running") &&
+    j.payload?.publication_id === publicationId
+  );
+}
 
 function ago(iso: string | null): string {
   if (!iso) return "jamais";
@@ -51,8 +65,11 @@ export function PublicationCard({ contentId, bodyKey }: { contentId: string; bod
             ) : (
               <span className="text-muted">synchronisé {ago(p.syncedAt)}</span>
             )}
-            {(p.stale || p.lastError) && !(syncJob && (syncJob.status === "queued" || syncJob.status === "running")) && (
-              <Button variant="outline" onClick={() => jobs.create("sync", { publication_id: p.id, target: p.target })}>
+            {(p.stale || p.lastError) && !hasActiveSync(jobs.jobs, p.id) && (
+              <Button
+                variant="outline"
+                onClick={() => jobs.create("sync", { publication_id: p.id, target: p.target }, { coalesce: true })}
+              >
                 Re-synchroniser
               </Button>
             )}

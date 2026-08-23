@@ -25,11 +25,16 @@ export function useJobs(targetType: "idea" | "content" | "comment", targetId: st
     if (e.type === "job.updated" && e.targetType === targetType && e.targetId === targetId) refresh();
   });
 
-  const create = useCallback(async (kind: string, payload?: Record<string, unknown>) => {
+  const create = useCallback(async (
+    kind: string, payload?: Record<string, unknown>, opts?: { coalesce?: boolean },
+  ) => {
     setError(null);
     const res = await fetch("/api/jobs", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind, target_type: targetType, target_id: targetId, payload }),
+      body: JSON.stringify({
+        kind, target_type: targetType, target_id: targetId, payload,
+        coalesce: opts?.coalesce,
+      }),
     });
     if (!res.ok) {
       const { error: message } = await res.json().catch(() => ({ error: null }));

@@ -120,6 +120,13 @@ ou la dicte. Le worker lit `list_comments({status: "open"})` — chaque entrée 
 courant — réécrit uniquement les passages visés, puis `resolve_comment(comment_id,
 {status: "applied"})`.
 
+**Divergence d'ancrage à connaître** : `quote`/`prefix`/`suffix` proviennent du texte
+**rendu** (sans marqueurs markdown), alors que `position` est recalculée sur le
+**markdown source** — elle peut être `null` (passage formaté, ou à cheval sur deux blocs)
+ou une **première occurrence** (`level: 3`). Toujours vérifier `position.level` (1 = exact,
+2 = normalisé, 3 = quote seule) avant de réécrire à l'offset ; en cas de doute, retrouver
+le passage par la `quote` plutôt que par `start`/`end`.
+
 Une remarque dictée part en `POST /api/contents/:id/comments/audio`, qui crée le
 commentaire et un job `transcribe` sur cette cible. Le worker récupère l'audio par
 **la seule route REST binaire ouverte au token MCP** :

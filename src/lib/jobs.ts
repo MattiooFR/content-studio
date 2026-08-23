@@ -65,7 +65,13 @@ export async function createJob(workspaceId: string, input: {
   const kind = input.kind.trim();
   if (!kind) throw new Error("kind requis");
   if (kind.length > MAX_JOB_KIND_LENGTH) throw new Error(`kind trop long (max ${MAX_JOB_KIND_LENGTH} caractères)`);
+  // payload.dedupe_key est un champ réservé : seul `input.dedupeKey` (qui
+  // alimente aussi le verrou et le filtre des jobs actifs) peut l'écrire.
+  // Sans ce nettoyage, un appelant (MCP, route) pourrait glisser son propre
+  // dedupe_key dans le payload et défaire l'unicité sans jamais influencer le
+  // verrou, qui continuerait à raisonner sur "" (Finding, review finale).
   const payload: Record<string, unknown> = { ...(input.payload ?? {}) };
+  delete payload.dedupe_key;
   if (input.dedupeKey !== undefined) payload.dedupe_key = input.dedupeKey;
   if (jsonBytes(payload) > MAX_JOB_JSON_BYTES) throw new Error(`payload trop gros (max ${MAX_JOB_JSON_BYTES} octets)`);
   await assertTarget(workspaceId, input.targetType, input.targetId);
