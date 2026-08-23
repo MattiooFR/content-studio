@@ -1,6 +1,6 @@
 import {
   pgTable, text, timestamp, uuid, jsonb, boolean, integer,
-  uniqueIndex, index,
+  uniqueIndex, index, customType,
 } from "drizzle-orm/pg-core";
 
 // ---- better-auth (shape exigée par l'adapter drizzle de better-auth) ----
@@ -288,6 +288,40 @@ export const publications = pgTable("publications", {
   uniqueIndex("publications_content_target").on(t.contentId, t.target),
   index("publications_ws_target").on(t.workspaceId, t.target),
 ]);
+
+// ---- relecture : commentaires ancrés + dictée ---------------------------
+// Ancrage = schéma VDL éprouvé : quote (texte surligné) + prefix/suffix (40
+// caractères de contexte), robuste aux petites modifications du corps.
+export const contentComments = pgTable("content_comments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  contentId: uuid("content_id").notNull()
+    .references(() => contents.id, { onDelete: "cascade" }),
+  quote: text("quote").notNull().default(""),
+  prefix: text("prefix").notNull().default(""),
+  suffix: text("suffix").notNull().default(""),
+  section: text("section").notNull().default(""),
+  body: text("body").notNull().default(""),
+  kind: text("kind", { enum: ["text", "voice"] }).notNull().default("text"),
+  status: text("status", { enum: ["open", "applied", "resolved"] }).notNull().default("open"),
+  transcription: text("transcription", { enum: ["none", "pending", "done", "failed"] }).notNull().default("none"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [index("content_comments_content").on(t.contentId), index("content_comments_ws").on(t.workspaceId)]);
+
+// Audio d'une note vocale, en base (≤ 16 Mo), purgé dès que la transcription
+// aboutit. Pas de workspace_id : cloisonné par le commentaire parent — toute
+// lecture passe par content_comments.workspace_id d'abord.
+export const commentAudio = pgTable("comment_audio", {
+  commentId: uuid("comment_id").primaryKey()
+    .references(() => contentComments.id, { onDelete: "cascade" }),
+  mime: text("mime").notNull(),
+  bytes: customType<{ data: Buffer; driverData: Buffer }>({ dataType() { return "bytea"; } })("bytes").notNull(),
+  size: integer("size").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
 
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),

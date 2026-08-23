@@ -43,6 +43,13 @@
       "when": 1787470104296,
       "tag": "0005_reflective_piledriver",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787471204333,
+      "tag": "0006_marvelous_lizard",
+      "breakpoints": true
     }
   ]
 }

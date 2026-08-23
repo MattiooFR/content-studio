@@ -23,4 +23,10 @@ describe("schéma", () => {
     const names = await tableNames();
     expect(names).toContain("publications");
   });
+
+  it("les tables content_comments et comment_audio existent (Task 10)", async () => {
+    const names = await tableNames();
+    expect(names).toContain("content_comments");
+    expect(names).toContain("comment_audio");
+  });
 });
