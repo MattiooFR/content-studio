@@ -38,6 +38,10 @@ const VALUE_TONE: Record<string, Tone> = {
   running: "accent",
   cancelled: "muted",
   // done / failed déjà définis ci-dessus (success / danger)
+  // commentaires de relecture (vague cockpit agent)
+  open: "warning",
+  applied: "success",
+  resolved: "muted",
 };
 
 const TONE_CLASS: Record<Tone, string> = {
@@ -53,7 +57,7 @@ export function StatusBadge({
   value,
   className,
 }: {
-  kind: "idea" | "content" | "source" | "gauge" | "job";
+  kind: "idea" | "content" | "source" | "gauge" | "job" | "comment";
   value: string;
   className?: string;
 }) {

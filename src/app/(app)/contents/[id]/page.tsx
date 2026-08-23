@@ -10,6 +10,8 @@ import { ProposedBanner } from "@/components/proposed-banner";
 import { RevisionsPanel, type Revision } from "@/components/revisions-panel";
 import { PublicationCard } from "@/components/cockpit/publication-card";
 import { useChatDrawer } from "@/components/cockpit/chat-drawer";
+import { ReviewPane } from "@/components/review/review-pane";
+import { useComments } from "@/components/review/use-comments";
 
 type ContentWithChannel = {
   id: string; body: string; status: string; currentRevisionId: string | null;
@@ -40,6 +42,27 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
   const jobs = useJobs("content", id);
   const publishJob = jobs.latest("publish");
   const publishActive = publishJob?.status === "queued" || publishJob?.status === "running";
+
+  // Onglet courant. L'éditeur est DÉMONTÉ pendant la relecture (rendu
+  // conditionnel plus bas) : plus de focus, donc plus d'`editingUntil` — une
+  // révision agent produite pendant qu'on relit devient `current` et arrive
+  // ici par SSE, le ReviewPane se met à jour tout seul.
+  const [tab, setTab] = useState<"edit" | "review">("edit");
+  const reviseJob = jobs.latest("revise");
+  const reviseActive = reviseJob?.status === "queued" || reviseJob?.status === "running";
+  // Uniquement pour le compteur de l'onglet et l'activation du bouton
+  // « Appliquer les commentaires » : ReviewPane a sa propre instance du hook
+  // (acceptable en v1, cf. décision Task 15).
+  const { comments } = useComments(id);
+  const openCount = comments.filter((c) => c.status === "open").length;
+
+  // Quitter « Éditer » vide d'abord la file d'autosave : sans ça, le debounce
+  // encore armé tirerait sur un éditeur démonté (frappe perdue), et le
+  // ReviewPane afficherait un corps périmé d'une frappe.
+  async function goToTab(next: "edit" | "review") {
+    if (next === "review" && tab === "edit") await editorRef.current?.flushSaves();
+    setTab(next);
+  }
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/contents/${id}`);
@@ -284,23 +307,47 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
           onResolve={(action) => resolve(proposed.id, action)}
         />
       )}
-      <ContentEditor
-        ref={editorRef}
-        contentId={id}
-        initialBody={content.body}
-        externalBody={externalBody}
-        onSaved={(revisionId, body) => {
-          ownRevisions.current.add(revisionId);
-          // Sans ceci, content.currentRevisionId/body restaient figés sur la
-          // révision PRÉCÉDENTE jusqu'au prochain refetch externe (le fast-path
-          // SSE ci-dessus ignore cette révision, donc rien ne rafraîchissait
-          // l'état) : le bandeau de proposition diffait contre un corps périmé,
-          // et resolve() capturait un expectedCurrentRevisionId périmé → un
-          // accept juste après un save propre rebondissait systématiquement en
-          // "diff rafraîchi" au premier clic.
-          setContent((prev) => prev ? { ...prev, currentRevisionId: revisionId, body } : prev);
-        }}
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        {(["edit", "review"] as const).map((t) => (
+          <button key={t} type="button" onClick={() => goToTab(t)}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors duration-150 ${
+              tab === t ? "bg-accent-soft text-accent" : "text-muted hover:text-ink"
+            }`}>
+            {t === "edit" ? "Éditer" : `Relire${openCount ? ` (${openCount})` : ""}`}
+          </button>
+        ))}
+        <button
+          type="button"
+          disabled={!openCount || reviseActive}
+          onClick={() => jobs.create("revise")}
+          className="ml-auto rounded-full border border-line bg-raised px-2.5 py-1 text-[11px] font-medium tracking-wider text-muted uppercase transition-colors duration-150 hover:border-line-strong disabled:opacity-50"
+        >
+          Appliquer les commentaires
+        </button>
+        <JobStatus job={reviseJob} onRetry={jobs.retry} onCancel={jobs.cancel}
+          renderDone={() => "Commentaires appliqués"} />
+      </div>
+      {tab === "review" ? (
+        <ReviewPane contentId={id} body={content.body} />
+      ) : (
+        <ContentEditor
+          ref={editorRef}
+          contentId={id}
+          initialBody={content.body}
+          externalBody={externalBody}
+          onSaved={(revisionId, body) => {
+            ownRevisions.current.add(revisionId);
+            // Sans ceci, content.currentRevisionId/body restaient figés sur la
+            // révision PRÉCÉDENTE jusqu'au prochain refetch externe (le fast-path
+            // SSE ci-dessus ignore cette révision, donc rien ne rafraîchissait
+            // l'état) : le bandeau de proposition diffait contre un corps périmé,
+            // et resolve() capturait un expectedCurrentRevisionId périmé → un
+            // accept juste après un save propre rebondissait systématiquement en
+            // "diff rafraîchi" au premier clic.
+            setContent((prev) => prev ? { ...prev, currentRevisionId: revisionId, body } : prev);
+          }}
+        />
+      )}
       <RevisionsPanel
         revisions={revisions} currentBody={content.body} onRestore={restore}
         onOpenLane={openLaneById}
