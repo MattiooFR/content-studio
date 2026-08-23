@@ -3,6 +3,8 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 import { ContentEditor, type ContentEditorHandle } from "@/components/editor";
 import { ExportButton } from "@/components/export-button";
 import { StatusBadge } from "@/components/cockpit/status-badge";
+import { JobStatus } from "@/components/cockpit/job-status";
+import { useJobs } from "@/hooks/use-jobs";
 import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 import { ProposedBanner } from "@/components/proposed-banner";
 import { RevisionsPanel, type Revision } from "@/components/revisions-panel";
@@ -34,6 +36,9 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
   // ContentEditor (voir editor.tsx, `pendingRef`) : moins de logique de
   // focus/timing éparpillée entre deux fichiers, moins de bugs à chaque round.
   const editorRef = useRef<ContentEditorHandle>(null);
+  const jobs = useJobs("content", id);
+  const publishJob = jobs.latest("publish");
+  const publishActive = publishJob?.status === "queued" || publishJob?.status === "running";
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/contents/${id}`);
@@ -241,6 +246,14 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
             format={content.channel.constraints.export_format ?? "markdown"} />
           <button
             type="button"
+            disabled={publishActive || !content.body.trim()}
+            onClick={async () => { await jobs.create("publish"); load(); }}
+            className="rounded-full border border-accent/40 bg-accent-soft px-2.5 py-1 text-[11px] font-medium tracking-wider text-accent uppercase transition-colors duration-150 hover:border-accent disabled:opacity-50"
+          >
+            Publier
+          </button>
+          <button
+            type="button"
             onClick={() => openForContent({
               // titre STABLE par contenu (pas juste par canal) : c'est la clé
               // que openForContent utilise pour retrouver/recréer LA MÊME
@@ -254,6 +267,13 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
           </button>
         </div>
       </div>
+      <JobStatus
+        job={publishJob} onRetry={jobs.retry} onCancel={jobs.cancel}
+        renderDone={(j) => typeof j.result.url === "string"
+          ? <a className="underline" href={j.result.url} target="_blank" rel="noreferrer">Publié → voir</a>
+          : "Publié"}
+      />
+      {jobs.error && <p className="text-sm text-danger">{jobs.error}</p>}
       {error && <p className="text-sm text-danger">{error}</p>}
       {note && <p className="text-sm text-muted">{note}</p>}
       {proposed && (

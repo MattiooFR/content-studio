@@ -33,6 +33,11 @@ const VALUE_TONE: Record<string, Tone> = {
   enabled: "success",
   disabled: "muted",
   error: "danger",
+  // jobs (vague cockpit agent)
+  queued: "muted",
+  running: "accent",
+  cancelled: "muted",
+  // done / failed déjà définis ci-dessus (success / danger)
 };
 
 const TONE_CLASS: Record<Tone, string> = {
@@ -48,7 +53,7 @@ export function StatusBadge({
   value,
   className,
 }: {
-  kind: "idea" | "content" | "source" | "gauge";
+  kind: "idea" | "content" | "source" | "gauge" | "job";
   value: string;
   className?: string;
 }) {

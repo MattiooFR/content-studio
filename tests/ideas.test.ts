@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createIdea, listIdeas, getIdea } from "@/lib/ideas";
 import { createPersona, listPersonas } from "@/lib/personas";
+import { createJob } from "@/lib/jobs";
 import { signUpTestUser } from "./helpers";
 
 describe("ideas — cloisonnement workspace", () => {
@@ -44,5 +45,15 @@ describe("ideas — cloisonnement workspace", () => {
 
     expect((await listPersonas(a.workspaceId)).map((p) => p.id)).toContain(persona.id);
     expect((await listPersonas(b.workspaceId)).map((p) => p.id)).not.toContain(persona.id);
+  });
+
+  it("listIdeas expose lastJobStatus (dernier job visant l'idée) — null sans job", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Avec job" });
+    const sans = await createIdea(ws.workspaceId, { title: "Sans job" });
+    await createJob(ws.workspaceId, { kind: "write", targetType: "idea", targetId: idea.id, payload: { channel_key: "community" } });
+    const rows = await listIdeas(ws.workspaceId);
+    expect(rows.find((r) => r.id === idea.id)!.lastJobStatus).toBe("queued");
+    expect(rows.find((r) => r.id === sans.id)!.lastJobStatus).toBeNull();
   });
 });

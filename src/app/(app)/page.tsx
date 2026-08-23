@@ -6,10 +6,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { SectionCard } from "@/components/cockpit/section-card";
 import { StatusBadge } from "@/components/cockpit/status-badge";
 import { FunnelLine } from "@/components/cockpit/funnel-line";
+import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 
 type Idea = {
   id: string; title: string; notes: string; status: string;
   tags: string[]; createdAt: string; contentsCount: number; sourcesCount: number;
+  lastJobStatus: string | null;
 };
 
 export default function InboxPage() {
@@ -23,6 +25,7 @@ export default function InboxPage() {
     if (res.ok) setIdeas(await res.json());
   }, []);
   useEffect(() => { load(); }, [load]);
+  useWorkspaceEvents((e) => { if (e.type === "job.updated" || e.type === "idea.created") load(); });
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -96,7 +99,13 @@ export default function InboxPage() {
                 </span>
               )}
               <span className="mt-auto flex items-center justify-between gap-2 pt-1">
-                <StatusBadge kind="idea" value={i.status} />
+                <span className="flex items-center gap-1.5">
+                  <StatusBadge kind="idea" value={i.status} />
+                  {i.lastJobStatus && (
+                    <StatusBadge kind="job" value={i.lastJobStatus}
+                      className={i.lastJobStatus === "running" || i.lastJobStatus === "queued" ? "animate-pulse" : undefined} />
+                  )}
+                </span>
                 <span className="text-[11px] text-faint tabular-nums">
                   {i.sourcesCount ?? 0} source{(i.sourcesCount ?? 0) > 1 ? "s" : ""} ·{" "}
                   {i.contentsCount ?? 0} contenu{(i.contentsCount ?? 0) > 1 ? "s" : ""}

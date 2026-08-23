@@ -21,6 +21,8 @@ export async function listIdeas(workspaceId: string, status?: string) {
       contentsCount: sql<number>`(select count(*)::int from contents c where c.idea_id = ideas.id)`,
       // même pattern, même piège : `s.idea_id = ideas.id` qualifié à la main.
       sourcesCount: sql<number>`(select count(*)::int from sources s where s.idea_id = ideas.id)`,
+      // idem : dernier job (tous kinds confondus) visant cette idée, null si aucun.
+      lastJobStatus: sql<string | null>`(select j.status from agent_jobs j where j.target_type = 'idea' and j.target_id = ideas.id order by j.created_at desc limit 1)`,
     })
     .from(ideas)
     .where(where)

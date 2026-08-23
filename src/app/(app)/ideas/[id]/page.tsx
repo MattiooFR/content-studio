@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionCard } from "@/components/cockpit/section-card";
 import { StatusBadge } from "@/components/cockpit/status-badge";
+import { JobStatus } from "@/components/cockpit/job-status";
+import { useJobs } from "@/hooks/use-jobs";
 
 type Idea = { id: string; title: string; notes: string; status: string };
 type Content = { id: string; channelId: string; status: string; type: string };
@@ -27,6 +29,23 @@ export default function IdeaPage({ params }: { params: Promise<{ id: string }> }
   const [sourceText, setSourceText] = useState("");
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [openSourceId, setOpenSourceId] = useState<string | null>(null);
+  const jobs = useJobs("idea", id);
+  const writeJob = jobs.latest("write");
+  const writeActive = writeJob?.status === "queued" || writeJob?.status === "running";
+  const [writeChannel, setWriteChannel] = useState<string>("");
+  // canal par défaut : le dernier choisi dans ce navigateur, sinon le premier
+  useEffect(() => {
+    if (!channels.length || writeChannel) return;
+    let remembered: string | null = null;
+    try { remembered = localStorage.getItem("cs.writeChannel"); } catch { /* stockage indisponible */ }
+    setWriteChannel(channels.some((c) => c.key === remembered) ? remembered! : channels[0].key);
+  }, [channels, writeChannel]);
+
+  async function requestWrite() {
+    try { localStorage.setItem("cs.writeChannel", writeChannel); } catch { /* ignoré */ }
+    await jobs.create("write", { channel_key: writeChannel });
+    load(); // l'idée passe in_progress
+  }
 
   const load = useCallback(async () => {
     const [i, c, s] = await Promise.all([
@@ -168,6 +187,33 @@ export default function IdeaPage({ params }: { params: Promise<{ id: string }> }
             })}
           </ul>
         )}
+      </SectionCard>
+
+      <SectionCard title="Rédiger avec l'agent">
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={writeChannel}
+            onChange={(e) => setWriteChannel(e.target.value)}
+            disabled={writeActive || channels.length === 0}
+            className="rounded-lg border border-line bg-raised px-2 py-1.5 text-sm"
+          >
+            {channels.map((c) => <option key={c.id} value={c.key}>{c.name}</option>)}
+          </select>
+          <Button onClick={requestWrite} disabled={writeActive || !writeChannel}>Rédiger</Button>
+          <JobStatus
+            job={writeJob}
+            onRetry={jobs.retry}
+            onCancel={jobs.cancel}
+            renderDone={(j) => {
+              const cid = typeof j.result.content_id === "string" ? j.result.content_id : null;
+              return cid ? <a className="underline" href={`/contents/${cid}`}>Brouillon prêt → ouvrir</a> : "Terminé";
+            }}
+          />
+        </div>
+        {jobs.error && <p className="mt-2 text-sm text-danger">{jobs.error}</p>}
+        <p className="mt-2 text-xs text-faint">
+          Un worker branché en MCP prend la demande, enquête, rédige, et dépose un brouillon en relecture.
+        </p>
       </SectionCard>
 
       <SectionCard title="Décliner sur un canal">
