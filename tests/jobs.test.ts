@@ -71,6 +71,28 @@ describe("jobs — création et unicité", () => {
     expect(d.job.id).toBe(c.job.id);
   });
 
+  it("dedupeKey distingue plusieurs jobs sur la même cible ; la même clé dédoublonne (Finding 1, review Task 7)", async () => {
+    const ws = await signUpTestUser();
+    const idea = await ideaIn(ws);
+    const { contentId } = await createContentDraft({ workspaceId: ws.workspaceId, ideaId: idea.id, channelKey: "community" });
+    const a = await createJob(ws.workspaceId, {
+      kind: "sync", targetType: "content", targetId: contentId, coalesce: true, dedupeKey: "pub-1",
+    });
+    const b = await createJob(ws.workspaceId, {
+      kind: "sync", targetType: "content", targetId: contentId, coalesce: true, dedupeKey: "pub-2",
+    });
+    expect(a.created).toBe(true);
+    expect(b.created).toBe(true);
+    expect(b.job.id).not.toBe(a.job.id);
+    expect(a.job.payload).toMatchObject({ dedupe_key: "pub-1" });
+    expect(b.job.payload).toMatchObject({ dedupe_key: "pub-2" });
+    const c = await createJob(ws.workspaceId, {
+      kind: "sync", targetType: "content", targetId: contentId, coalesce: true, dedupeKey: "pub-1",
+    });
+    expect(c.created).toBe(false);
+    expect(c.job.id).toBe(a.job.id);
+  });
+
   it("un kind différent sur la même cible n'est pas dédoublonné", async () => {
     const ws = await signUpTestUser();
     const idea = await ideaIn(ws);

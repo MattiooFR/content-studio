@@ -60,9 +60,15 @@ export async function POST(req: NextRequest) {
       if (!c.body.trim()) return NextResponse.json({ error: "corps vide : rien à publier" }, { status: 400 });
     }
 
+    // « Re-synchroniser » (Task 9) vise une publication précise : sans clé de
+    // dédoublonnage par publication_id, deux publications désynchronisées du
+    // même contenu se coalesceraient sur un seul job sync (Finding 1, review
+    // Task 7).
+    const dedupeKey = kind === "sync" && typeof p.publication_id === "string" ? p.publication_id : undefined;
     const r = await createJob(workspaceId, {
       kind, targetType: target_type as JobTargetType, targetId: target_id,
       payload: p, requestedBy: `user:${userId}`, coalesce: coalesce === true,
+      dedupeKey,
     });
     if (r.created) {
       if (kind === "write" && target_type === "idea") await updateIdea(workspaceId, target_id, { status: "in_progress" });

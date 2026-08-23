@@ -76,6 +76,11 @@ export async function enqueueSyncIfStale(workspaceId: string, contentId: string,
       kind: "sync", targetType: "content", targetId: contentId,
       payload: { publication_id: p.id, target: p.target },
       requestedBy: "system:publication-sync", coalesce: true,
+      // Une clé par publication : sinon deux publications désynchronisées du
+      // même contenu partagent l'unicité (workspace, kind, contentId) et la
+      // seconde se coalesce sur le job de la première, qui ne la resynchronise
+      // jamais (Finding 1, review Task 7).
+      dedupeKey: p.id,
     });
     if (r.created) created++;
   }

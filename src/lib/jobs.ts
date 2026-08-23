@@ -51,23 +51,34 @@ async function assertTarget(workspaceId: string, targetType: JobTargetType, targ
 export async function createJob(workspaceId: string, input: {
   kind: string; targetType: JobTargetType; targetId: string;
   payload?: Record<string, unknown>; requestedBy?: string; coalesce?: boolean;
+  // Distingue plusieurs jobs légitimes sur la MÊME cible (ex. deux publications
+  // d'un même contenu à re-synchroniser) : sans clé, ils partagent l'unicité
+  // (workspace, kind, cible) et le second se coalesce sur le premier, qui
+  // l'ignore puisque son payload ne parle que de l'autre publication. Écrite
+  // dans payload.dedupe_key (le worker l'ignore) et injectée dans le verrou et
+  // le filtre des jobs actifs ; absente → comportement identique à avant.
+  dedupeKey?: string;
 }): Promise<{ job: Job; created: boolean }> {
   const kind = input.kind.trim();
   if (!kind) throw new Error("kind requis");
   if (kind.length > MAX_JOB_KIND_LENGTH) throw new Error(`kind trop long (max ${MAX_JOB_KIND_LENGTH} caractères)`);
-  const payload = input.payload ?? {};
+  const payload: Record<string, unknown> = { ...(input.payload ?? {}) };
+  if (input.dedupeKey !== undefined) payload.dedupe_key = input.dedupeKey;
   if (jsonBytes(payload) > MAX_JOB_JSON_BYTES) throw new Error(`payload trop gros (max ${MAX_JOB_JSON_BYTES} octets)`);
   await assertTarget(workspaceId, input.targetType, input.targetId);
+  const dedupeKey = input.dedupeKey ?? "";
 
   const r = await db.transaction(async (tx) => {
-    // Verrou consultatif par (workspace, kind, cible) le temps de la transaction :
-    // deux créations simultanées (double clic, hook + bouton) ne peuvent pas
-    // toutes deux conclure « aucun job actif » et insérer chacune le leur.
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${workspaceId}:${kind}:${input.targetId}`}))`);
+    // Verrou consultatif par (workspace, kind, cible, dedupeKey) le temps de la
+    // transaction : deux créations simultanées (double clic, hook + bouton) ne
+    // peuvent pas toutes deux conclure « aucun job actif » et insérer chacune
+    // le leur.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${workspaceId}:${kind}:${input.targetId}:${dedupeKey}`}))`);
     const active = await tx.select().from(agentJobs).where(and(
       eq(agentJobs.workspaceId, workspaceId), eq(agentJobs.kind, kind),
       eq(agentJobs.targetType, input.targetType), eq(agentJobs.targetId, input.targetId),
       inArray(agentJobs.status, ["queued", "running"]),
+      sql`coalesce(${agentJobs.payload}->>'dedupe_key', '') = ${dedupeKey}`,
     )).orderBy(desc(agentJobs.createdAt));
     const queued = active.find((j) => j.status === "queued");
     const running = active.find((j) => j.status === "running");
@@ -177,7 +188,15 @@ export async function completeJob(workspaceId: string, id: string, result: Recor
 export async function failJob(workspaceId: string, id: string, error: string): Promise<Job | null> {
   const message = (error || "échec sans message").slice(0, MAX_JOB_ERROR_LENGTH);
   const row = await finish(workspaceId, id, { status: "failed", error: message });
-  if (row) await applyFailureEffects(row, message);
+  // Effet post-commit non bloquant : le job est déjà passé failed, une erreur
+  // ici (ex. publication_id malformé) ne doit jamais faire échouer l'appelant.
+  if (row) {
+    try {
+      await applyFailureEffects(row, message);
+    } catch (e) {
+      console.error("applyFailureEffects a échoué après failJob", e);
+    }
+  }
   return row;
 }
 

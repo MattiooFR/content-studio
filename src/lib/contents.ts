@@ -75,8 +75,16 @@ export async function applyContentUpdate(p: {
   });
   bus.publish(p.workspaceId, { type: "content.updated", contentId: p.contentId, ...result });
   // Révision devenue courante sur un contenu déjà publié quelque part : job sync
-  // (spec §2.3). Jamais pour une proposed — result.state le garantit ici.
-  if (result.state === "current") await enqueueSyncIfStale(p.workspaceId, p.contentId, p.body);
+  // (spec §2.3). Jamais pour une proposed — result.state le garantit ici. Effet
+  // post-commit non bloquant : la révision est déjà écrite, une erreur ici ne
+  // doit jamais transformer une écriture réussie en échec côté appelant.
+  if (result.state === "current") {
+    try {
+      await enqueueSyncIfStale(p.workspaceId, p.contentId, p.body);
+    } catch (e) {
+      console.error("enqueueSyncIfStale a échoué après applyContentUpdate", e);
+    }
+  }
   return result;
 }
 
@@ -139,8 +147,13 @@ export async function resolveProposed(p: {
   });
   // Même hook que applyContentUpdate : la proposition acceptée devient le
   // corps courant, donc les publications existantes peuvent être en retard.
-  const [fresh] = await db.select({ body: contents.body }).from(contents).where(eq(contents.id, p.contentId));
-  if (fresh) await enqueueSyncIfStale(p.workspaceId, p.contentId, fresh.body);
+  // Effet post-commit non bloquant : la résolution est déjà actée en base.
+  try {
+    const [fresh] = await db.select({ body: contents.body }).from(contents).where(eq(contents.id, p.contentId));
+    if (fresh) await enqueueSyncIfStale(p.workspaceId, p.contentId, fresh.body);
+  } catch (e) {
+    console.error("enqueueSyncIfStale a échoué après resolveProposed", e);
+  }
 }
 
 export async function setContentStatus(

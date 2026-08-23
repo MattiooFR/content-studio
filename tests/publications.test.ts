@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { signUpTestUser, authedReq, req } from "./helpers";
 import { createIdea } from "@/lib/ideas";
 import { createContentDraft, applyContentUpdate, resolveProposed, heartbeatEditing, getContent } from "@/lib/contents";
-import { listJobs, claimJob, failJob } from "@/lib/jobs";
+import { createJob, listJobs, claimJob, failJob } from "@/lib/jobs";
 import {
   bodyHash, listPublications, linkPublication, markSynced, setPublicationError,
 } from "@/lib/publications";
@@ -60,12 +60,24 @@ describe("publications — hook « publié puis modifié »", () => {
     await applyContentUpdate({ workspaceId: ws.workspaceId, contentId, body: "# T\n\nv3", authorType: "user" });
     const syncs = await listJobs(ws.workspaceId, { kind: "sync" });
     expect(syncs).toHaveLength(1);
-    expect(syncs[0].payload).toEqual({ publication_id: p.id, target: "fluentcommunity" });
+    expect(syncs[0].payload).toEqual({ publication_id: p.id, target: "fluentcommunity", dedupe_key: p.id });
     expect(syncs[0].requestedBy).toBe("system:publication-sync");
     // un sync running + nouvelle édition → un second queued (rattrapage)
     await claimJob(ws.workspaceId, syncs[0].id, "w");
     await applyContentUpdate({ workspaceId: ws.workspaceId, contentId, body: "# T\n\nv4", authorType: "user" });
     expect(await listJobs(ws.workspaceId, { kind: "sync", status: "queued" })).toHaveLength(1);
+  });
+
+  it("deux publications désynchronisées → deux jobs sync, un par publication (Finding 1, review Task 7)", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws, "# T\n\nv1");
+    const p1 = await linkPublication(ws.workspaceId, { contentId, target: "fluentcommunity", externalId: "1", bodyHash: "hash-perime-1" });
+    const p2 = await linkPublication(ws.workspaceId, { contentId, target: "wordpress", externalId: "2", bodyHash: "hash-perime-2" });
+    await applyContentUpdate({ workspaceId: ws.workspaceId, contentId, body: "# T\n\nv2", authorType: "user" });
+    const syncs = await listJobs(ws.workspaceId, { kind: "sync", status: "queued" });
+    expect(syncs).toHaveLength(2);
+    const ids = syncs.map((j) => (j.payload as { publication_id: string }).publication_id).sort();
+    expect(ids).toEqual([p1.id, p2.id].sort());
   });
 
   it("une révision proposed (agent pendant édition humaine) ne crée rien ; son acceptation, si", async () => {
@@ -92,6 +104,17 @@ describe("publications — hook « publié puis modifié »", () => {
     const [pub] = await listPublications(ws.workspaceId, { contentId });
     expect(pub.lastError).toBe("FluentCommunity 500");
     expect(pub.id).toBe(p.id);
+  });
+
+  it("failJob sur un sync avec publication_id invalide ne rejette pas : le job finit quand même failed (Finding 2, review Task 7)", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws, "# T\n\nv1");
+    const { job } = await createJob(ws.workspaceId, {
+      kind: "sync", targetType: "content", targetId: contentId,
+      payload: { publication_id: "pas-un-uuid", target: "fluentcommunity" },
+    });
+    await claimJob(ws.workspaceId, job.id, "w");
+    await expect(failJob(ws.workspaceId, job.id, "erreur worker")).resolves.toMatchObject({ status: "failed" });
   });
 });
 
