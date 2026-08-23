@@ -13,6 +13,7 @@ import {
   addSource, listSources, getSource, attachExtraction,
 } from "@/lib/sources";
 import { listJobs, claimJob, heartbeatJob, completeJob, failJob, JobStateError } from "@/lib/jobs";
+import { listPublications, linkPublication, markSynced } from "@/lib/publications";
 
 // NOTE version : mcp-handler 2.1.0 exporte à la fois `withMcpAuth` et
 // `experimental_withMcpAuth` (alias identique). On utilise le nom stable.
@@ -330,6 +331,43 @@ const handler = createMcpHandler(
         const row = await updateIdea(wsOf(extra), idea_id, { status, notes, tags });
         return json(row ?? { error: "idée introuvable dans ce workspace" });
       }
+    );
+
+    // ---- publications : le lien vers l'objet publié par le worker --------------
+    server.registerTool(
+      "list_publications",
+      {
+        description: "Les publications du workspace (lien contenu ↔ objet publié sur une cible externe : external_id, url, hash du corps publié, synced_at, last_error). Filtres : target, content_id. Un worker s'en sert pour l'import (« ce feed est-il déjà lié ? ») et le sync (« quel external_id ? »).",
+        inputSchema: { target: z.string().optional(), content_id: z.string().uuid().optional() },
+      },
+      async ({ target, content_id }, extra) => json(await listPublications(wsOf(extra), { target, contentId: content_id }))
+    );
+    server.registerTool(
+      "link_publication",
+      {
+        description: "Déclare (ou met à jour) qu'un contenu est publié sur une cible : target (ex. fluentcommunity), external_id, url, meta, body_hash = sha256 hex du corps markdown tel que publié. Upsert sur (content, target). À appeler juste après une publication réussie.",
+        inputSchema: {
+          content_id: z.string().uuid(), target: z.string().trim().min(1), external_id: z.string().trim().min(1),
+          url: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), body_hash: z.string().min(1),
+        },
+      },
+      async ({ content_id, target, external_id, url, meta, body_hash }, extra) => {
+        try {
+          return json(await linkPublication(wsOf(extra), { contentId: content_id, target, externalId: external_id, url, meta, bodyHash: body_hash }));
+        } catch (e) {
+          if (e instanceof Error && (e.message.includes("introuvable") || e.message.includes("requis"))) return json({ error: e.message });
+          throw e;
+        }
+      }
+    );
+    server.registerTool(
+      "mark_synced",
+      {
+        description: "Après un sync réussi : pose le nouveau hash du corps publié, synced_at = maintenant, efface last_error.",
+        inputSchema: { publication_id: z.string().uuid(), body_hash: z.string().min(1) },
+      },
+      async ({ publication_id, body_hash }, extra) =>
+        json((await markSynced(wsOf(extra), publication_id, body_hash)) ?? { error: "publication introuvable dans ce workspace" })
     );
   },
   {}
