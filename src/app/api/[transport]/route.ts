@@ -9,6 +9,8 @@ import { listPersonas } from "@/lib/personas";
 import {
   createContentDraft, getContent, applyContentUpdate, listContents, setContentStatus,
 } from "@/lib/contents";
+import { listComments, updateComment } from "@/lib/comments";
+import { findPassage } from "@/lib/anchoring";
 import {
   addSource, listSources, getSource, attachExtraction,
 } from "@/lib/sources";
@@ -170,6 +172,34 @@ const handler = createMcpHandler(
           workspaceId: wsOf(extra), contentId: content_id,
           body, authorType: "agent", authorLabel: "mcp", laneId: lane_id,
         }))
+    );
+
+    // ---- relecture : les remarques de l'humain, à appliquer par l'agent -------
+    server.registerTool(
+      "list_comments",
+      {
+        description: "Les commentaires de relecture d'un contenu (surlignage + remarque, écrite ou dictée). Chaque entrée porte quote/prefix/suffix (ancrage), body (la remarque), status (open = à traiter), et anchor_found/position calculés sur le markdown courant (start/end = offsets dans le corps ; null si le passage a disparu). Appliquer = réécrire uniquement les passages visés, puis resolve_comment(status: applied).",
+        inputSchema: { content_id: z.string().uuid(), status: z.enum(["open", "applied", "resolved"]).optional() },
+      },
+      async ({ content_id, status }, extra) => {
+        const workspaceId = wsOf(extra);
+        const content = await getContent(workspaceId, content_id);
+        if (!content) return json({ error: "contenu introuvable dans ce workspace" });
+        const rows = await listComments(workspaceId, content_id, { status });
+        return json(rows.map((c) => {
+          const position = c.quote ? findPassage(content.body, c.quote, c.prefix, c.suffix) : null;
+          return { ...c, anchor_found: position !== null, position };
+        }));
+      }
+    );
+    server.registerTool(
+      "resolve_comment",
+      {
+        description: "Change le statut d'un commentaire : applied (l'agent a appliqué la remarque), resolved (clos sans changement), open (rouvert).",
+        inputSchema: { comment_id: z.string().uuid(), status: z.enum(["open", "applied", "resolved"]) },
+      },
+      async ({ comment_id, status }, extra) =>
+        json((await updateComment(wsOf(extra), comment_id, { status })) ?? { error: "commentaire introuvable dans ce workspace" })
     );
 
     server.registerTool(
