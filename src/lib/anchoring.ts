@@ -27,8 +27,16 @@ export function findPassage(full: string, quote: string, prefix: string, suffix:
     const start = exact + (prefix || "").length;
     return { start, end: start + quote.length, level: 1 };
   }
-  // 2 — blancs/entités/apostrophes normalisés, en conservant une table des positions
+  // 2 — blancs/entités/apostrophes normalisés, en conservant deux tables de
+  // positions : `map` (index source de DÉBUT de chaque caractère produit) et
+  // `mapEnd` (index source de FIN, exclusif). Un caractère produit peut venir
+  // de PLUSIEURS caractères source (une entité "&nbsp;" = 6 caractères
+  // source pour 1 espace produit ; un bloc d'espaces fusionné en 1 seul
+  // espace produit) : `end` ne peut donc pas se déduire de `map` seul (+1)
+  // sous peine de tronquer la tranche source au milieu d'une entité ou d'un
+  // bloc d'espaces.
   const map: number[] = [];
+  const mapEnd: number[] = [];
   let norm = "";
   let i = 0;
   while (i < full.length) {
@@ -41,13 +49,19 @@ export function findPassage(full: string, quote: string, prefix: string, suffix:
         break;
       }
     }
-    // un caractère (ou une entité entière) source peut produire 0..n
-    // caractères normalisés ; on garde l'index source de départ de chaque
-    // caractère produit, et on fusionne les blancs
     for (const ch of piece) {
-      if (ch === " " && norm.endsWith(" ")) continue;
+      if (ch === " " && norm.endsWith(" ")) {
+        // ce caractère (ou cette entité) rejoint le bloc d'espace précédent :
+        // on ne produit rien de nouveau, mais on repousse la borne de fin du
+        // dernier caractère produit jusqu'après CE caractère source, pour que
+        // `end` couvre tout le bloc d'espaces fusionnés, pas seulement son
+        // premier caractère
+        mapEnd[mapEnd.length - 1] = i + consumed;
+        continue;
+      }
       norm += ch;
       map.push(i);
+      mapEnd.push(i + consumed);
     }
     i += consumed;
   }
@@ -55,12 +69,12 @@ export function findPassage(full: string, quote: string, prefix: string, suffix:
   let idx = norm.indexOf(np + nq + ns);
   if (idx !== -1) {
     const s = idx + np.length;
-    return { start: map[s], end: map[s + nq.length - 1] + 1, level: 2 };
+    return { start: map[s], end: mapEnd[s + nq.length - 1], level: 2 };
   }
   // 3 — quote seule (première occurrence)
   const bare = full.indexOf(quote);
   if (bare !== -1) return { start: bare, end: bare + quote.length, level: 3 };
   idx = norm.indexOf(nq);
-  if (idx !== -1) return { start: map[idx], end: map[idx + nq.length - 1] + 1, level: 3 };
+  if (idx !== -1) return { start: map[idx], end: mapEnd[idx + nq.length - 1], level: 3 };
   return null;
 }
