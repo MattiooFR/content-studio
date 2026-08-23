@@ -58,6 +58,38 @@ describe("commentaires — texte", () => {
     expect(seen).toHaveLength(2);
     expect((seen[1] as { status: string }).status).toBe("applied");
   });
+
+  // Revue Task 15, finding I2 : sans cet événement, un onglet qui n'a pas
+  // fait la suppression lui-même garde le commentaire dans sa liste — donc
+  // un compteur « Relire » faux et un bouton « Appliquer les commentaires »
+  // actif alors qu'il ne reste rien à appliquer.
+  it("émet comment.updated à la suppression (et rien si la ligne n'existe pas / autre workspace)", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws);
+    const c = await createComment(ws.workspaceId, { contentId, body: "à supprimer" });
+    await updateComment(ws.workspaceId, c.id, { status: "resolved" });
+
+    const seen: WorkspaceEvent[] = [];
+    const un = bus.subscribe(ws.workspaceId, (e) => { if (e.type === "comment.updated") seen.push(e); });
+
+    // suppression depuis un autre workspace : rien ne doit être émis
+    const b = await signUpTestUser();
+    expect(await deleteComment(b.workspaceId, c.id)).toBe(false);
+    expect(seen).toHaveLength(0);
+
+    expect(await deleteComment(ws.workspaceId, c.id)).toBe(true);
+    // id inconnu : aucune ligne supprimée, donc aucun événement de plus
+    expect(await deleteComment(ws.workspaceId, c.id)).toBe(false);
+    un();
+
+    expect(seen).toHaveLength(1);
+    const e = seen[0] as { contentId: string; commentId: string; status: string };
+    expect(e.commentId).toBe(c.id);
+    expect(e.contentId).toBe(contentId);
+    // dernier statut connu de la ligne supprimée — pas de valeur « deleted »
+    expect(e.status).toBe("resolved");
+    expect(await listComments(ws.workspaceId, contentId, {})).toHaveLength(0);
+  });
 });
 
 describe("commentaires — dictée", () => {

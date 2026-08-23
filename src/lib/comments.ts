@@ -120,9 +120,20 @@ export async function updateComment(workspaceId: string, id: string, patch: { bo
 }
 
 export async function deleteComment(workspaceId: string, id: string): Promise<boolean> {
-  const rows = await db.delete(contentComments)
-    .where(and(eq(contentComments.id, id), eq(contentComments.workspaceId, workspaceId))).returning({ id: contentComments.id });
-  return rows.length > 0;
+  // `.returning()` complet (et non le seul id) : il faut la ligne supprimée
+  // pour publier l'événement. Sans lui, tout abonné qui n'a pas déclenché la
+  // suppression lui-même restait sur une liste périmée — le compteur de
+  // l'onglet « Relire » et l'activation d'« Appliquer les commentaires »
+  // gardaient un commentaire qui n'existe plus (revue Task 15, finding I2).
+  const [row] = await db.delete(contentComments)
+    .where(and(eq(contentComments.id, id), eq(contentComments.workspaceId, workspaceId))).returning();
+  if (!row) return false;
+  // On réémet `comment.updated` avec le DERNIER statut connu de la ligne
+  // supprimée, pas un statut « deleted » : l'union d'événements reste telle
+  // quelle, et les consommateurs se contentent de re-lister — la disparition
+  // se lit dans la réponse du GET, pas dans l'événement.
+  publish(row);
+  return true;
 }
 
 /** Cloisonné par le commentaire parent (comment_audio n'a pas de workspace_id). */

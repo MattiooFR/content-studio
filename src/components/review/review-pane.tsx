@@ -4,7 +4,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import { findPassage } from "@/lib/anchoring";
-import { useComments, type Anchor, type CommentRow } from "@/components/review/use-comments";
+import { useComments, type Anchor } from "@/components/review/use-comments";
 import { CommentPopover } from "@/components/review/comment-popover";
 import { CommentList } from "@/components/review/comment-list";
 
@@ -66,7 +66,15 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
   const rootRef = useRef<HTMLDivElement>(null);
   const { comments, error, createText, createVoice, update, remove } = useComments(contentId);
   const [pending, setPending] = useState<{ anchor: Anchor; start: number; end: number } | null>(null);
-  const [selected, setSelected] = useState<CommentRow | null>(null);
+  // On garde l'ID, pas la ligne : `useComments` remplace le tableau à chaque
+  // rafraîchissement SSE, et un instantané de `CommentRow` ne suivrait jamais.
+  // Concrètement (revue Task 15, finding I1) : un popover ouvert sur une
+  // dictée en cours restait bloqué sur « Transcription en cours… » — la
+  // transcription arrivée par `comment.updated` ne l'atteignait pas. Dériver
+  // la ligne du tableau courant règle aussi la suppression depuis un autre
+  // onglet : la ligne disparaît, `selected` retombe à null, le popover se
+  // ferme tout seul.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [general, setGeneral] = useState(false);
   const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
   const [lost, setLost] = useState<Set<string>>(new Set());
@@ -75,6 +83,10 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
   // compris au tout premier rendu (immediatelyRender: false).
   const [docVersion, setDocVersion] = useState(0);
   const hl = useMemo(supportsHighlights, []);
+  const selected = useMemo(
+    () => comments.find((c) => c.id === selectedId) ?? null,
+    [comments, selectedId]
+  );
 
   const editor = useEditor({
     extensions: [StarterKit, Markdown],
@@ -146,7 +158,7 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
     });
     if (hit) {
       place();
-      setSelected(hit); setPending(null); setGeneral(false);
+      setSelectedId(hit.id); setPending(null); setGeneral(false);
       sel.removeAllRanges();
       return;
     }
@@ -155,7 +167,7 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
     const quote = full.slice(start, end);
     if (!quote.trim()) return;
     place();
-    setSelected(null); setGeneral(false);
+    setSelectedId(null); setGeneral(false);
     setPending({
       anchor: {
         quote: quote.slice(0, 2000),
@@ -168,7 +180,7 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
     sel.removeAllRanges();
   }, [comments]);
 
-  const close = () => { setPending(null); setSelected(null); setGeneral(false); };
+  const close = () => { setPending(null); setSelectedId(null); setGeneral(false); };
   const anchorForSave = pending?.anchor ?? null;
 
   return (
@@ -195,8 +207,15 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
               close();
             }}
             onSaveVoice={async (blob, mime) => {
-              await createVoice(blob, mime, general ? null : anchorForSave);
-              close();
+              const created = await createVoice(blob, mime, general ? null : anchorForSave);
+              // On NE ferme PAS : on bascule le popover sur le commentaire
+              // qui vient d'être créé, pour que l'utilisateur voie
+              // « Transcription en cours… » puis le texte arriver par SSE.
+              // (`createVoice` a déjà rafraîchi la liste, donc `selected`
+              // résout immédiatement.) En cas d'échec, `created` est null et
+              // le message d'erreur du hook s'affiche sous le corps.
+              setPending(null); setGeneral(false);
+              setSelectedId(created?.id ?? null);
             }}
             onResolve={selected ? async () => { await update(selected.id, { status: "resolved" }); close(); } : undefined}
             onDelete={selected ? async () => { await remove(selected.id); close(); } : undefined}
@@ -207,10 +226,10 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
       </div>
       <CommentList comments={comments} lost={lost} highlightsSupported={hl}
         onSelect={(c) => {
-          setSelected(c); setPending(null); setGeneral(false);
+          setSelectedId(c.id); setPending(null); setGeneral(false);
           setPopoverStyle({ top: 8, right: 8 });
         }}
-        onGeneral={() => { setGeneral(true); setSelected(null); setPending(null); }} />
+        onGeneral={() => { setGeneral(true); setSelectedId(null); setPending(null); }} />
     </div>
   );
 }
