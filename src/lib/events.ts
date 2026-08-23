@@ -10,7 +10,9 @@ export type WorkspaceEvent =
   | { type: "content.updated"; contentId: string; revisionId: string; state: "current" | "proposed" }
   | { type: "content.status"; contentId: string; status: string }
   | { type: "idea.created"; ideaId: string }
-  | { type: "lane.message"; laneId: string; event: LaneRunEvent };
+  | { type: "lane.message"; laneId: string; event: LaneRunEvent }
+  // vague « cockpit agent » : chaque transition d'un job (création incluse)
+  | { type: "job.updated"; jobId: string; kind: string; targetType: "idea" | "content" | "comment"; targetId: string; status: string };
 
 type Handler = (e: WorkspaceEvent) => void;
 
