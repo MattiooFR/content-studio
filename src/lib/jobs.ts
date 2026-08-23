@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { agentJobs, contents, ideas } from "@/lib/db/schema";
+import { agentJobs, contentComments, contents, ideas } from "@/lib/db/schema";
 import { bus } from "@/lib/events";
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -33,7 +33,6 @@ function publish(job: Job) {
 /**
  * La cible doit exister DANS ce workspace. target_id n'a pas de FK (trois
  * tables possibles) : c'est ici, et seulement ici, que le lien est garanti.
- * Le cas `comment` est branché en Task 12 (table content_comments).
  */
 async function assertTarget(workspaceId: string, targetType: JobTargetType, targetId: string) {
   if (targetType === "idea") {
@@ -43,6 +42,10 @@ async function assertTarget(workspaceId: string, targetType: JobTargetType, targ
   } else if (targetType === "content") {
     const [row] = await db.select({ id: contents.id }).from(contents)
       .where(and(eq(contents.id, targetId), eq(contents.workspaceId, workspaceId)));
+    if (row) return;
+  } else if (targetType === "comment") {
+    const [row] = await db.select({ id: contentComments.id }).from(contentComments)
+      .where(and(eq(contentComments.id, targetId), eq(contentComments.workspaceId, workspaceId)));
     if (row) return;
   }
   throw new Error("cible introuvable dans ce workspace");
@@ -181,8 +184,25 @@ async function finish(workspaceId: string, id: string, set: Partial<typeof agent
 
 export async function completeJob(workspaceId: string, id: string, result: Record<string, unknown> = {}): Promise<Job | null> {
   if (jsonBytes(result) > MAX_JOB_JSON_BYTES) throw new Error(`result trop gros (max ${MAX_JOB_JSON_BYTES} octets)`);
-  return finish(workspaceId, id, { status: "done", result });
-  // Effets de complétion des kinds intégrés (transcribe → commentaire) : Task 12.
+  // Un transcribe sans result.text ne doit jamais passer done avec un
+  // commentaire qui resterait pending pour toujours : vérifié AVANT finish,
+  // pour laisser le job running (retry possible) plutôt que de committer une
+  // transition qu'on ne pourrait pas honorer côté commentaire.
+  const current = await getJob(workspaceId, id);
+  if (current?.kind === "transcribe" && current.targetType === "comment" && typeof result.text !== "string")
+    throw new Error("result.text requis pour un job transcribe");
+  const row = await finish(workspaceId, id, { status: "done", result });
+  // Effet post-commit non bloquant : le job est déjà passé done, une erreur
+  // ici ne doit jamais faire échouer l'appelant (même style que failJob).
+  if (row && row.kind === "transcribe" && row.targetType === "comment") {
+    try {
+      const { applyTranscription } = await import("@/lib/comments");
+      await applyTranscription(workspaceId, row.targetId, result.text as string);
+    } catch (e) {
+      console.error("applyTranscription a échoué après completeJob", e);
+    }
+  }
+  return row;
 }
 
 export async function failJob(workspaceId: string, id: string, error: string): Promise<Job | null> {
@@ -209,7 +229,11 @@ async function applyFailureEffects(job: Job, message: string) {
     const { setPublicationError } = await import("@/lib/publications");
     await setPublicationError(job.workspaceId, payload.publication_id, message);
   }
-  // transcribe → commentaire : Task 12.
+  if (job.kind === "transcribe" && job.targetType === "comment") {
+    // Même raison : comments.ts importe jobs.ts pour createJob.
+    const { failTranscription } = await import("@/lib/comments");
+    await failTranscription(job.workspaceId, job.targetId);
+  }
 }
 
 export async function retryJob(workspaceId: string, id: string): Promise<Job | null> {

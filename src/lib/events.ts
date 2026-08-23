@@ -12,7 +12,9 @@ export type WorkspaceEvent =
   | { type: "idea.created"; ideaId: string }
   | { type: "lane.message"; laneId: string; event: LaneRunEvent }
   // vague « cockpit agent » : chaque transition d'un job (création incluse)
-  | { type: "job.updated"; jobId: string; kind: string; targetType: "idea" | "content" | "comment"; targetId: string; status: string };
+  | { type: "job.updated"; jobId: string; kind: string; targetType: "idea" | "content" | "comment"; targetId: string; status: string }
+  // création, mise à jour, ou changement de transcription d'un commentaire
+  | { type: "comment.updated"; contentId: string; commentId: string; status: string; transcription: string };
 
 type Handler = (e: WorkspaceEvent) => void;
 
