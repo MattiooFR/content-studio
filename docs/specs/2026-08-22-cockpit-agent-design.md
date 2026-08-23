@@ -1,7 +1,7 @@
 # Vague « cockpit agent » — spécification de conception
 
 **Date** : 2026-08-22
-**Statut** : validé en brainstorming, à relire avant plan
+**Statut** : implémenté (plan docs/plans/2026-08-22-cockpit-agent.md)
 **Périmètre** : trois briques génériques de content-studio — **jobs**, **publications**,
 **relecture & dictée** — qui font de l'outil le poste de pilotage d'un worker externe.
 Premier consommateur : le pipeline « Actus IA » de La Minute IA (spec séparée, dans le

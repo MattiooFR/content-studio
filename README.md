@@ -52,12 +52,124 @@ signup ouvert.
 2. `claude mcp add --transport http content-studio http://localhost:3003/api/mcp --header "Authorization: Bearer cs_…"`
 3. Dans ta session : « lis mes idées et décline la première en post communauté »
 
-Outils exposés : list_ideas, get_idea, list_channels, list_personas,
-get_art_direction, create_content_draft, get_content, update_content,
-register_asset (v1.1).
+Outils exposés (26) :
+- **Idées & contenu** : list_ideas, create_idea, get_idea, list_channels, list_personas,
+  get_art_direction, create_content_draft, get_content, update_content.
+- **Sources** : list_sources, get_source, add_source, attach_extraction, register_asset
+  (réservé v1.1 — v1 est texte uniquement).
+- **Relecture** : list_comments, resolve_comment.
+- **Jobs** (worker externe, détail juste en dessous) : list_jobs, claim_job,
+  heartbeat_job, complete_job, fail_job, set_content_status, update_idea.
+- **Publications** : list_publications, link_publication, mark_synced.
 
 Pendant que tu édites dans l'UI, une écriture de l'agent devient une
 « proposition » avec diff à accepter — jamais d'écrasement silencieux.
+
+## Un worker externe : jobs, publications, relecture
+
+Trois briques qui font de l'outil le poste de pilotage d'un worker externe, connecté en
+MCP — l'outil n'appelle jamais de modèle et ne publie jamais lui-même.
+
+### Le modèle
+
+L'UI pose des **jobs** (bouton « Rédiger », « Publier », « Appliquer les commentaires »,
+ou le hook de re-synchronisation). Un worker branché en MCP tourne en boucle :
+`list_jobs({status: "queued"})` → `claim_job` (atomique : un seul worker gagne) → il
+travaille → `complete_job` ou `fail_job`. Sur un travail long, `heartbeat_job` toutes les
+60 secondes — sans battement pendant 10 minutes, le job repasse automatiquement `failed`
+(« agent silencieux »), ça libère la cible pour un nouveau job.
+
+**Un workspace sans worker branché voit simplement ses jobs rester « en attente d'un
+agent ».** Rien ne bloque, rien ne timeout côté UI — l'humain garde la main pour relancer
+depuis les boutons.
+
+**Pas de réessai automatique.** Un job `failed` reste `failed` : c'est le bouton
+« Réessayer » de l'UI (`POST /api/jobs/:id/retry`) qui le repasse `queued`, jamais un
+retry silencieux côté serveur.
+
+### Les kinds intégrés
+
+| kind | à la création (UI) | à la complétion |
+|---|---|---|
+| `write` | idée → `in_progress` | worker pose `set_content_status(review)` |
+| `publish` | contenu → `approved` (corps non vide requis) | worker pose `link_publication` + `set_content_status(published)` |
+| `sync` | jamais par un bouton direct — créé par le hook de re-sync, ou par « Re-synchroniser » sur la carte publication | worker pose `mark_synced` |
+| `revise` | rien | worker `list_comments(open)` → réécrit → `update_content` → `resolve_comment(applied)` |
+| `transcribe` | jamais par un bouton — créé par la route de dictée | seule complétion qui écrit ailleurs que dans le job : `result.text` devient le corps du commentaire |
+
+Tout autre `kind` est libre : l'outil l'accepte, le range dans la file, et laisse le
+worker et l'UI convenir de son sens (pastille générique, pas d'effet automatique).
+
+### Publications
+
+Après une publication réussie, le worker appelle `link_publication(content_id, target,
+external_id, url?, meta?, body_hash)` — upsert sur (contenu, cible). La page contenu
+affiche alors une carte « Publication » avec lien vers l'externe et statut de fraîcheur.
+
+**Hook « publié puis modifié »** : dès qu'une révision devient la version courante d'un
+contenu déjà publié, si son hash diffère du corps publié, un job `sync` est posé
+automatiquement (coalescé — un seul `sync` en attente par publication, via
+`dedupe_key` dans le payload). Le worker republie le corps courant puis appelle
+`mark_synced(publication_id, body_hash)`, qui efface `last_error`.
+
+### Relecture
+
+Onglet **Relire** sur la page contenu : l'humain surligne un passage, écrit une remarque
+ou la dicte. Le worker lit `list_comments({status: "open"})` — chaque entrée porte
+`quote`/`prefix`/`suffix` (ancrage), `body`, et `position` déjà recalculée sur le markdown
+courant — réécrit uniquement les passages visés, puis `resolve_comment(comment_id,
+{status: "applied"})`.
+
+Une remarque dictée part en `POST /api/contents/:id/comments/audio`, qui crée le
+commentaire et un job `transcribe` sur cette cible. Le worker récupère l'audio par
+**la seule route REST binaire ouverte au token MCP** :
+
+    GET /api/jobs/:id/audio
+    Authorization: Bearer cs_…
+
+Elle rend l'audio brut (content-type = mime d'origine) si et seulement si le job, dans le
+workspace du token, est un `transcribe` ciblant un commentaire — 404 sinon (job d'un autre
+workspace, mauvais kind, audio déjà purgé après transcription). Le worker transcrit, puis
+`complete_job(job_id, {result: {text: "..."}})` — l'outil bascule lui-même le commentaire
+en `body = text`, `transcription: "done"`.
+
+### Squelette de worker
+
+```js
+// worker.mjs — sonde le studio toutes les 30 s, un job à la fois (client MCP = @modelcontextprotocol/sdk)
+const tool = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+while (true) {
+  const [job] = await tool("list_jobs", { status: "queued" });
+  if (!job) { await sleep(30_000); continue; }
+  const claimed = await tool("claim_job", { job_id: job.id, worker_label: "mon-worker" });
+  if (claimed.error) continue;                       // un autre worker l'a pris
+  const hb = setInterval(() => tool("heartbeat_job", { job_id: job.id }), 60_000);
+  try {
+    switch (job.kind) {
+      case "write":      /* enquête + rédaction → create_content_draft, update_content, set_content_status(review) */ break;
+      case "publish":    /* POST vers ta cible → link_publication, set_content_status(published), update_idea(done) */ break;
+      case "sync":       /* re-publie le corps courant → mark_synced */ break;
+      case "revise":     /* list_comments(open) → réécrit → update_content → resolve_comment(applied) */ break;
+      case "transcribe": /* GET /api/jobs/:id/audio (Bearer) → whisper → complete_job({ text }) */ break;
+      default:           throw new Error(`kind inconnu : ${job.kind}`);
+    }
+    await tool("complete_job", { job_id: job.id, result: { /* … */ } });
+  } catch (e) {
+    await tool("fail_job", { job_id: job.id, error: String(e.message).slice(0, 2000) });
+  } finally { clearInterval(hb); }
+}
+```
+
+### Sécurité et bornes
+
+Aucune exécution côté serveur ici (contrairement aux Lanes, ci-dessous) : jobs,
+publications et commentaires ne sont que des lignes en base, un worker externe fait tout
+le travail. `GET /api/jobs/:id/audio` est la seule route REST binaire ouverte au token
+MCP — tout le reste passe par les outils MCP JSON ci-dessus, bornés au workspace du token.
+
+Bornes fixes, mêmes pour l'UI et pour MCP : message d'erreur de job 2000 caractères,
+payload et result de job 64 Ko chacun, audio de commentaire 16 Mo, citation (quote)
+2000 caractères, corps de commentaire 10 000 caractères.
 
 ## Extension Chrome (clipper)
 
