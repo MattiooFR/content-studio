@@ -263,6 +263,32 @@ export const agentJobs = pgTable("agent_jobs", {
   index("agent_jobs_target").on(t.workspaceId, t.targetType, t.targetId),
 ]);
 
+// ---- publications ---------------------------------------------------------
+// Le lien entre un contenu du studio et l'objet publié ailleurs par un
+// worker (target libre : 'fluentcommunity', 'wordpress', …). Sert à afficher
+// « publié ici », à détecter « modifié depuis » (hash du corps publié) et à
+// demander une re-synchronisation (job sync, créé par applyContentUpdate).
+export const publications = pgTable("publications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  contentId: uuid("content_id").notNull()
+    .references(() => contents.id, { onDelete: "cascade" }),
+  target: text("target").notNull(),
+  externalId: text("external_id").notNull(),
+  url: text("url").notNull().default(""),
+  meta: jsonb("meta").notNull().default({}),
+  publishedBodyHash: text("published_body_hash").notNull().default(""),
+  publishedAt: timestamp("published_at"),
+  syncedAt: timestamp("synced_at"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("publications_content_target").on(t.contentId, t.target),
+  index("publications_ws_target").on(t.workspaceId, t.target),
+]);
+
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull()

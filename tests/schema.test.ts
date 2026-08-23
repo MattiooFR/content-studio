@@ -18,4 +18,9 @@ describe("schéma", () => {
     const names = await tableNames();
     expect(names).toContain("agent_jobs");
   });
+
+  it("la table publications existe", async () => {
+    const names = await tableNames();
+    expect(names).toContain("publications");
+  });
 });
