@@ -162,7 +162,7 @@ describe("jobs — cycle de vie", () => {
     await expect(cancelJob(ws.workspaceId, j2.id)).rejects.toBeInstanceOf(JobStateError);
   });
 
-  it("heartbeat met à jour lastHeartbeatAt ; silence > 10 min → failed « agent silencieux »", async () => {
+  it("heartbeat met à jour lastHeartbeatAt ; silence > 10 min → failed « agent silencieux », balayé par listJobs", async () => {
     const ws = await signUpTestUser();
     const idea = await ideaIn(ws);
     const { job } = await createJob(ws.workspaceId, { kind: "write", targetType: "idea", targetId: idea.id });
@@ -176,11 +176,13 @@ describe("jobs — cycle de vie", () => {
     await db.update(agentJobs)
       .set({ lastHeartbeatAt: new Date(Date.now() - 11 * 60_000) })
       .where(eq(agentJobs.id, job.id));
-    expect(await sweepSilentJobs(ws.workspaceId)).toBe(1);
+    // c'est le balayage paresseux DÉCLENCHÉ PAR listJobs (pas un sweepSilentJobs
+    // direct) qui doit basculer le job silencieux — c'est ce qu'on prouve ici.
+    await listJobs(ws.workspaceId, {});
     const after = await getJob(ws.workspaceId, job.id);
     expect(after!.status).toBe("failed");
     expect(after!.error).toMatch(/silencieux/);
-    // listJobs balaie aussi : un second appel ne retrouve plus rien à basculer
+    // un appel direct à sweepSilentJobs ensuite prouve l'idempotence : rien à rebasculer
     expect(await sweepSilentJobs(ws.workspaceId)).toBe(0);
   });
 
