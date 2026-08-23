@@ -25,6 +25,27 @@ export async function signUpTestUser() {
   return { userId: u.id, workspaceId: m.workspaceId, email };
 }
 
+export type TestUser = Awaited<ReturnType<typeof signUpTestUser>>;
+
+// Session RÉELLE via better-auth (jamais un cookie fabriqué à la main).
+export async function sessionCookie(user: TestUser): Promise<string> {
+  const res = (await auth.api.signInEmail({
+    body: { email: user.email, password: "motdepasse-solide-123" },
+    asResponse: true,
+  })) as Response;
+  const setCookie = res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie") ?? ""];
+  return setCookie.map((c) => c.split(";")[0]).join("; ");
+}
+
+export function req(url: string, init?: RequestInit) {
+  return new NextRequest(`http://localhost:3003${url}`, init as never);
+}
+
+export async function authedReq(user: TestUser, url: string, init?: RequestInit) {
+  const cookie = await sessionCookie(user);
+  return req(url, { ...init, headers: { ...(init?.headers ?? {}), cookie } });
+}
+
 // Appelle un outil MCP à travers le vrai handler HTTP, avec un vrai Bearer :
 // le chemin qu'emprunte un agent, auth et cloisonnement compris.
 export async function callMcpTool(token: string, name: string, args: Record<string, unknown>) {

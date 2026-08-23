@@ -1,11 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { NextRequest } from "next/server";
-import { auth } from "@/lib/auth";
 import { GET, PATCH } from "@/app/api/settings/workspace/route";
 import { getWorkspaceSettings, DEFAULT_LANE_COMMAND } from "@/lib/lanes";
-import { signUpTestUser } from "./helpers";
-
-type TestUser = Awaited<ReturnType<typeof signUpTestUser>>;
+import { signUpTestUser, req, authedReq } from "./helpers";
 
 // Toutes les autres routes de session du projet (lanes.test.ts, gauges via la
 // lib) ne testent QUE le 401 au niveau HTTP et laissent le succès à la lib —
@@ -14,27 +10,8 @@ type TestUser = Awaited<ReturnType<typeof signUpTestUser>>;
 // lib : pour la couvrir sans dupliquer un mécanisme de signature de cookie,
 // on obtient une session RÉELLE via `signInEmail({ asResponse: true })`, qui
 // rend les en-têtes Set-Cookie signés par better-auth lui-même — jamais un
-// cookie fabriqué à la main.
-async function sessionCookie(user: TestUser): Promise<string> {
-  const res = (await auth.api.signInEmail({
-    body: { email: user.email, password: "motdepasse-solide-123" },
-    asResponse: true,
-  })) as Response;
-  const setCookie = res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie") ?? ""];
-  return setCookie.map((c) => c.split(";")[0]).join("; ");
-}
-
-function req(url: string, init?: RequestInit) {
-  return new NextRequest(`http://localhost:3003${url}`, init as never);
-}
-
-async function authedReq(user: TestUser, url: string, init?: RequestInit) {
-  const cookie = await sessionCookie(user);
-  return req(url, {
-    ...init,
-    headers: { ...(init?.headers ?? {}), cookie },
-  });
-}
+// cookie fabriqué à la main. (sessionCookie/req/authedReq vivent désormais
+// dans ./helpers, réutilisés par jobs-routes.test.ts.)
 
 describe("routes /api/settings/workspace — session requise", () => {
   it("GET sans session → 401", async () => {
