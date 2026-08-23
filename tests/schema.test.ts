@@ -13,4 +13,9 @@ describe("schéma", () => {
       expect(names, `table manquante: ${t}`).toContain(t);
     }
   });
+
+  it("la table agent_jobs existe (Task 1, vague cockpit agent)", async () => {
+    const names = await tableNames();
+    expect(names).toContain("agent_jobs");
+  });
 });

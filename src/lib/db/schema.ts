@@ -234,6 +234,35 @@ export const workspaceSettings = pgTable("workspace_settings", {
     .default("claude -p --output-format stream-json --verbose"),
 });
 
+// ---- jobs (vague « cockpit agent ») ------------------------------------
+// Une demande de travail posée par l'humain (bouton) ou par une règle de
+// l'outil (hook), consommée par un worker EXTERNE via MCP. L'outil n'exécute
+// rien : il consigne, cloisonne, notifie. target_id n'a pas de FK (trois
+// tables cibles) : la lib vérifie la cible dans CE workspace à la création.
+export const agentJobs = pgTable("agent_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  targetType: text("target_type", { enum: ["idea", "content", "comment"] }).notNull(),
+  targetId: uuid("target_id").notNull(),
+  payload: jsonb("payload").notNull().default({}),
+  status: text("status", { enum: ["queued", "running", "done", "failed", "cancelled"] })
+    .notNull().default("queued"),
+  result: jsonb("result").notNull().default({}),
+  error: text("error"),
+  attempts: integer("attempts").notNull().default(0),
+  requestedBy: text("requested_by"),
+  claimedBy: text("claimed_by"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+}, (t) => [
+  index("agent_jobs_ws_status").on(t.workspaceId, t.status),
+  index("agent_jobs_target").on(t.workspaceId, t.targetType, t.targetId),
+]);
+
 export const assets = pgTable("assets", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull()
