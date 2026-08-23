@@ -8,6 +8,7 @@ import { useJobs } from "@/hooks/use-jobs";
 import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 import { ProposedBanner } from "@/components/proposed-banner";
 import { RevisionsPanel, type Revision } from "@/components/revisions-panel";
+import { PublicationCard } from "@/components/cockpit/publication-card";
 import { useChatDrawer } from "@/components/cockpit/chat-drawer";
 
 type ContentWithChannel = {
@@ -304,6 +305,7 @@ export default function ContentPage({ params }: { params: Promise<{ id: string }
         revisions={revisions} currentBody={content.body} onRestore={restore}
         onOpenLane={openLaneById}
       />
+      <PublicationCard contentId={id} bodyKey={content.currentRevisionId ?? ""} />
     </div>
   );
 }

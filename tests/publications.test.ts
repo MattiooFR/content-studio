@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { signUpTestUser } from "./helpers";
+import { signUpTestUser, authedReq, req } from "./helpers";
 import { createIdea } from "@/lib/ideas";
 import { createContentDraft, applyContentUpdate, resolveProposed, heartbeatEditing, getContent } from "@/lib/contents";
 import { listJobs, claimJob, failJob } from "@/lib/jobs";
 import {
   bodyHash, listPublications, linkPublication, markSynced, setPublicationError,
 } from "@/lib/publications";
+import { GET as pubsRoute } from "@/app/api/contents/[id]/publications/route";
 
 async function contentIn(ws: { workspaceId: string }, body = "# T\n\ncorps") {
   const idea = await createIdea(ws.workspaceId, { title: "I" });
@@ -91,5 +92,24 @@ describe("publications — hook « publié puis modifié »", () => {
     const [pub] = await listPublications(ws.workspaceId, { contentId });
     expect(pub.lastError).toBe("FluentCommunity 500");
     expect(pub.id).toBe(p.id);
+  });
+});
+
+describe("publications — route", () => {
+  it("GET /api/contents/:id/publications : 401 sans session, stale calculé, 404 hors workspace", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws, "# T\n\nv1");
+    await linkPublication(ws.workspaceId, { contentId, target: "fluentcommunity", externalId: "1", url: "https://c.test/1", bodyHash: bodyHash("# T\n\nv1") });
+    const p = { params: Promise.resolve({ id: contentId }) };
+    expect((await pubsRoute(req(`/api/contents/${contentId}/publications`), p)).status).toBe(401);
+    const ok = await pubsRoute(await authedReq(ws, `/api/contents/${contentId}/publications`), p);
+    expect(ok.status).toBe(200);
+    const rows = await ok.json();
+    expect(rows[0].stale).toBe(false);
+    await applyContentUpdate({ workspaceId: ws.workspaceId, contentId, body: "# T\n\nv2", authorType: "user" });
+    const again = await (await pubsRoute(await authedReq(ws, `/api/contents/${contentId}/publications`), p)).json();
+    expect(again[0].stale).toBe(true);
+    const b = await signUpTestUser();
+    expect((await pubsRoute(await authedReq(b, `/api/contents/${contentId}/publications`), p)).status).toBe(404);
   });
 });
