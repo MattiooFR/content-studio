@@ -71,6 +71,32 @@ describe("routes commentaires", () => {
     expect(big.status).toBe(413);
   });
 
+  it("audio streamé sans content-length : 413 dès le dépassement (sans tamponner tout le flux) ; petit flux → 201", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws);
+    const bigStream = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < 17; i++) c.enqueue(new Uint8Array(1024 * 1024));
+        c.close();
+      },
+    });
+    const bigStreamed = await audioRoute(await authedReq(ws, `/api/contents/${contentId}/comments/audio`, {
+      method: "POST", headers: { "content-type": "audio/webm" }, body: bigStream, duplex: "half",
+    } as RequestInit), P(contentId));
+    expect(bigStreamed.status).toBe(413);
+
+    const smallStream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array([1, 2, 3]));
+        c.close();
+      },
+    });
+    const smallStreamed = await audioRoute(await authedReq(ws, `/api/contents/${contentId}/comments/audio`, {
+      method: "POST", headers: { "content-type": "audio/webm" }, body: smallStream, duplex: "half",
+    } as RequestInit), P(contentId));
+    expect(smallStreamed.status).toBe(201);
+  });
+
   it("GET /api/jobs/:id/audio : 401 sans token ; 200 binaire avec le bon token ; 404 autre workspace ; 404 après transcription (audio purgé)", async () => {
     const ws = await signUpTestUser();
     const contentId = await contentIn(ws);

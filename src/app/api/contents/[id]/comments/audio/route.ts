@@ -2,6 +2,33 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireWorkspace, TenantError } from "@/lib/tenant";
 import { createVoiceComment, MAX_AUDIO_BYTES, AUDIO_MIMES } from "@/lib/comments";
 
+/**
+ * Lit le corps par morceaux et coupe DÈS que le cumul dépasse `max`, sans
+ * jamais tamponner plus que max + un chunk : un upload chunké/streamé sans
+ * (ou avec un) content-length mensonger ne doit pas forcer à bufferiser tout
+ * le flux avant de le rejeter (mémoire non bornée sinon). null = dépassement
+ * (→ 413 côté appelant) ; corps absent = vide (→ "audio vide" côté lib, 400).
+ */
+async function readBodyBounded(req: NextRequest, max: number): Promise<Buffer | null> {
+  const body = req.body;
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.length;
+    if (total > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { workspaceId, userId } = await requireWorkspace(req.headers);
@@ -11,8 +38,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "type audio non supporté" }, { status: 415 });
     const declared = Number(req.headers.get("content-length") ?? 0);
     if (declared > MAX_AUDIO_BYTES) return NextResponse.json({ error: "audio trop gros (16 Mo max)" }, { status: 413 });
-    const buf = Buffer.from(await req.arrayBuffer());
-    if (buf.length > MAX_AUDIO_BYTES) return NextResponse.json({ error: "audio trop gros (16 Mo max)" }, { status: 413 });
+    const buf = await readBodyBounded(req, MAX_AUDIO_BYTES);
+    if (buf === null) return NextResponse.json({ error: "audio trop gros (16 Mo max)" }, { status: 413 });
     const sp = req.nextUrl.searchParams;
     const r = await createVoiceComment(workspaceId, {
       contentId: id, audio: buf, mime, createdBy: userId,
