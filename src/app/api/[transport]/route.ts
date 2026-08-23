@@ -4,14 +4,15 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { channels, artDirections } from "@/lib/db/schema";
 import { resolveMcpToken } from "@/lib/tenant";
-import { listIdeas, getIdea, createIdea } from "@/lib/ideas";
+import { listIdeas, getIdea, createIdea, updateIdea } from "@/lib/ideas";
 import { listPersonas } from "@/lib/personas";
 import {
-  createContentDraft, getContent, applyContentUpdate, listContents,
+  createContentDraft, getContent, applyContentUpdate, listContents, setContentStatus,
 } from "@/lib/contents";
 import {
   addSource, listSources, getSource, attachExtraction,
 } from "@/lib/sources";
+import { listJobs, claimJob, heartbeatJob, completeJob, failJob, JobStateError } from "@/lib/jobs";
 
 // NOTE version : mcp-handler 2.1.0 exporte à la fois `withMcpAuth` et
 // `experimental_withMcpAuth` (alias identique). On utilise le nom stable.
@@ -234,6 +235,101 @@ const handler = createMcpHandler(
         inputSchema: { kind: z.enum(["image", "video", "audio"]), mime: z.string() },
       },
       async () => json({ error: "register_asset arrive en v1.1 — v1 est texte uniquement" })
+    );
+
+    // ---- jobs : la file de travail du worker externe -----------------------
+    // Une erreur métier (introuvable, transition refusée) est rendue en
+    // `{ error }` : le worker la lit et décide, pas d'exception JSON-RPC.
+    const jobOr = async (p: Promise<unknown>) => {
+      try {
+        const row = await p;
+        return json(row ?? { error: "job introuvable dans ce workspace" });
+      } catch (e) {
+        if (e instanceof JobStateError) return json({ error: e.message, code: e.code });
+        throw e;
+      }
+    };
+
+    server.registerTool(
+      "list_jobs",
+      {
+        description: "Les jobs du workspace (demandes posées par l'humain ou par l'outil), plus anciens d'abord. Sans filtre : tous. Un worker sonde `status: \"queued\"`, puis claim_job. Chaque job porte kind, target_type/target_id, payload, et targetTitle (résumé de la cible).",
+        inputSchema: {
+          status: z.enum(["queued", "running", "done", "failed", "cancelled"]).optional(),
+          kind: z.string().optional(),
+        },
+      },
+      async ({ status, kind }, extra) =>
+        json(await listJobs(wsOf(extra), { status, kind, order: "asc" }))
+    );
+
+    server.registerTool(
+      "claim_job",
+      {
+        description: "Prend un job queued (atomique : un seul worker gagne). Rend le job en running, ou { error } s'il est déjà pris/terminé/introuvable. Pendant un travail long, appeler heartbeat_job toutes les 60 s : sans battement pendant 10 min, le job est basculé en failed.",
+        inputSchema: { job_id: z.string().uuid(), worker_label: z.string().trim().min(1).max(64) },
+      },
+      async ({ job_id, worker_label }, extra) => jobOr(claimJob(wsOf(extra), job_id, worker_label))
+    );
+
+    server.registerTool(
+      "heartbeat_job",
+      { description: "Signale que le worker travaille toujours sur ce job (running).", inputSchema: { job_id: z.string().uuid() } },
+      async ({ job_id }, extra) => jobOr(heartbeatJob(wsOf(extra), job_id))
+    );
+
+    server.registerTool(
+      "complete_job",
+      {
+        description: "Termine un job running avec un résultat (ex. { content_id } pour write, { url } pour publish, { text } pour transcribe). Les statuts des cibles se posent à part (set_content_status, update_idea, link_publication…) — sauf transcribe, dont le texte est écrit dans le commentaire par l'outil.",
+        inputSchema: { job_id: z.string().uuid(), result: z.record(z.string(), z.unknown()).optional() },
+      },
+      async ({ job_id, result }, extra) => jobOr(completeJob(wsOf(extra), job_id, result ?? {}))
+    );
+
+    server.registerTool(
+      "fail_job",
+      {
+        description: "Échoue un job running avec un message lisible par l'humain (affiché tel quel dans l'UI, tronqué à 2000 caractères). Pas de réessai automatique : c'est le bouton de l'UI.",
+        inputSchema: { job_id: z.string().uuid(), error: z.string().min(1) },
+      },
+      async ({ job_id, error }, extra) => jobOr(failJob(wsOf(extra), job_id, error))
+    );
+
+    server.registerTool(
+      "set_content_status",
+      {
+        description: "Pose le statut d'un contenu (draft, review, approved, published, generating, rejected). Le worker s'en sert après write (review) et publish (published).",
+        inputSchema: {
+          content_id: z.string().uuid(),
+          status: z.enum(["draft", "review", "approved", "published", "generating", "rejected"]),
+        },
+      },
+      async ({ content_id, status }, extra) => {
+        try {
+          return json(await setContentStatus(wsOf(extra), content_id, status));
+        } catch (e) {
+          if (e instanceof Error && e.message.includes("introuvable")) return json({ error: e.message });
+          throw e;
+        }
+      }
+    );
+
+    server.registerTool(
+      "update_idea",
+      {
+        description: "Met à jour une idée : statut (inbox, in_progress, done, archived), notes, tags. Les champs absents ne bougent pas.",
+        inputSchema: {
+          idea_id: z.string().uuid(),
+          status: z.enum(["inbox", "in_progress", "done", "archived"]).optional(),
+          notes: z.string().optional(),
+          tags: z.array(z.string()).optional(),
+        },
+      },
+      async ({ idea_id, status, notes, tags }, extra) => {
+        const row = await updateIdea(wsOf(extra), idea_id, { status, notes, tags });
+        return json(row ?? { error: "idée introuvable dans ce workspace" });
+      }
     );
   },
   {}
