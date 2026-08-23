@@ -87,11 +87,22 @@ export async function createVoiceComment(workspaceId: string, input: Anchor & {
     return row;
   });
   publish(comment);
-  const { job } = await createJob(workspaceId, {
-    kind: "transcribe", targetType: "comment", targetId: comment.id,
-    payload: { content_id: input.contentId, mime: input.mime, size: input.audio.length },
-    requestedBy: input.createdBy ? `user:${input.createdBy}` : "system:voice-comment",
-  });
+  // createJob possède sa propre transaction + verrou avisé : elle reste hors
+  // de celle du commentaire/audio ci-dessus. Mais si elle échoue (payload
+  // refusé, DB indisponible…), le commentaire ne doit pas rester « pending »
+  // sans job et sans recours : on le bascule en « failed » (visible, audio
+  // conservé, « Réessayer » possible) avant de propager l'erreur.
+  let job: Job;
+  try {
+    ({ job } = await createJob(workspaceId, {
+      kind: "transcribe", targetType: "comment", targetId: comment.id,
+      payload: { content_id: input.contentId, mime: input.mime, size: input.audio.length },
+      requestedBy: input.createdBy ? `user:${input.createdBy}` : "system:voice-comment",
+    }));
+  } catch (e) {
+    await failTranscription(workspaceId, comment.id);
+    throw e;
+  }
   return { comment, job };
 }
 

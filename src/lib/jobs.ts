@@ -120,7 +120,18 @@ export async function sweepSilentJobs(workspaceId: string): Promise<number> {
       eq(agentJobs.workspaceId, workspaceId), eq(agentJobs.status, "running"),
       sql`coalesce(${agentJobs.lastHeartbeatAt}, ${agentJobs.startedAt}, ${agentJobs.createdAt}) < ${limit}`,
     )).returning();
-  rows.forEach(publish);
+  for (const row of rows) {
+    publish(row);
+    // Même garantie que failJob : la transition est déjà committée, une panne
+    // d'effet (ex. commentaire déjà supprimé) ne doit jamais remonter — sinon
+    // un worker mort au milieu d'une dictée laisserait le commentaire
+    // « pending » pour toujours, sans même l'affordance « Réessayer ».
+    try {
+      await applyFailureEffects(row, SILENT_ERROR);
+    } catch (e) {
+      console.error("applyFailureEffects a échoué après sweepSilentJobs", e);
+    }
+  }
   return rows.length;
 }
 
@@ -260,7 +271,20 @@ export async function cancelJob(workspaceId: string, id: string): Promise<Job | 
     .set({ status: "cancelled", finishedAt: new Date() })
     .where(and(eq(agentJobs.id, id), eq(agentJobs.workspaceId, workspaceId), eq(agentJobs.status, "queued")))
     .returning();
-  if (row) { publish(row); return row; }
+  if (row) {
+    publish(row);
+    // Même garantie que failJob/sweepSilentJobs : la transition est déjà
+    // committée, une panne d'effet ne doit jamais faire échouer l'appelant.
+    // Pour un transcribe/comment annulé, ça bascule la transcription en
+    // « failed » (affordance « Réessayer ») plutôt que de la laisser pending
+    // à vie côté commentaire.
+    try {
+      await applyFailureEffects(row, "annulé");
+    } catch (e) {
+      console.error("applyFailureEffects a échoué après cancelJob", e);
+    }
+    return row;
+  }
   const existing = await getJob(workspaceId, id);
   if (!existing) return null;
   throw new JobStateError(`annulation refusée : job en statut ${existing.status}`);

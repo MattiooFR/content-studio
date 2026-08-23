@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { signUpTestUser } from "./helpers";
+import { eq } from "drizzle-orm";
+import { db, signUpTestUser } from "./helpers";
+import { agentJobs } from "@/lib/db/schema";
 import { createIdea } from "@/lib/ideas";
 import { createContentDraft, applyContentUpdate } from "@/lib/contents";
 import { bus, type WorkspaceEvent } from "@/lib/events";
-import { claimJob, completeJob, failJob, getJob, retryJob } from "@/lib/jobs";
+import { cancelJob, claimJob, completeJob, failJob, getJob, listJobs, retryJob } from "@/lib/jobs";
 import {
   listComments, createComment, createVoiceComment, updateComment, deleteComment,
   getCommentAudio, MAX_AUDIO_BYTES, MAX_COMMENT_BODY_LENGTH,
@@ -113,5 +115,30 @@ describe("commentaires — dictée", () => {
     await claimJob(ws.workspaceId, job.id, "w");
     await expect(completeJob(ws.workspaceId, job.id, {})).rejects.toThrow(/text requis/);
     expect((await getJob(ws.workspaceId, job.id))!.status).toBe("running");
+  });
+
+  it("worker mort (silence > 10 min) sur un transcribe → transcription failed, audio conservé (balayage déclenché par listJobs)", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws);
+    const { comment, job } = await createVoiceComment(ws.workspaceId, { contentId, audio: Buffer.from("a"), mime: "audio/webm" });
+    await claimJob(ws.workspaceId, job.id, "w");
+    // on recule artificiellement le dernier battement de 11 min (même pattern que jobs.test.ts)
+    await db.update(agentJobs)
+      .set({ lastHeartbeatAt: new Date(Date.now() - 11 * 60_000) })
+      .where(eq(agentJobs.id, job.id));
+    await listJobs(ws.workspaceId, {});
+    const c = (await listComments(ws.workspaceId, contentId, {}))[0];
+    expect(c.transcription).toBe("failed");
+    expect(await getCommentAudio(ws.workspaceId, comment.id)).not.toBeNull();
+  });
+
+  it("annulation d'un job transcribe queued → transcription failed (affordance « Réessayer »)", async () => {
+    const ws = await signUpTestUser();
+    const contentId = await contentIn(ws);
+    const { comment, job } = await createVoiceComment(ws.workspaceId, { contentId, audio: Buffer.from("a"), mime: "audio/webm" });
+    await cancelJob(ws.workspaceId, job.id);
+    const c = (await listComments(ws.workspaceId, contentId, {}))[0];
+    expect(c.transcription).toBe("failed");
+    expect(await getCommentAudio(ws.workspaceId, comment.id)).not.toBeNull();
   });
 });
