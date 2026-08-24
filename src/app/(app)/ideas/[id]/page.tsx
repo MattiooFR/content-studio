@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionCard } from "@/components/cockpit/section-card";
+import { MarkdownView } from "@/components/markdown-view";
 import { StatusBadge } from "@/components/cockpit/status-badge";
 import { JobStatus } from "@/components/cockpit/job-status";
 import { useJobs } from "@/hooks/use-jobs";
@@ -125,9 +126,7 @@ export default function IdeaPage({ params }: { params: Promise<{ id: string }> }
 
       {idea.notes && (
         <SectionCard title="Notes">
-          <p className="text-sm leading-relaxed whitespace-pre-wrap text-muted">
-            {idea.notes}
-          </p>
+          <MarkdownView markdown={idea.notes} className="text-sm leading-relaxed" />
         </SectionCard>
       )}
 
