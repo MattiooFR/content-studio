@@ -50,7 +50,7 @@ export default function TokensPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-4xl space-y-6 px-6 py-8">
       <div>
         <h1 className="text-lg font-semibold tracking-tight">Tokens MCP</h1>
         <p className="mt-1 text-xs text-muted">

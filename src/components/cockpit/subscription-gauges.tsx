@@ -82,8 +82,14 @@ function ErrorGauge({ label, error }: { label: string; error: string }) {
  * droite. Auto-refresh au montage puis toutes les 5 min ; un bouton discret
  * force `?refresh=1`. Ne lève JAMAIS : une source cassée devient une jauge
  * grise, un fetch qui échoue laisse l'état précédent affiché.
+ *
+ * `vertical` (Task 5, sidebar 224px) : la mise en page par défaut est une
+ * rangée pensée pour la largeur du header (`flex-1`, `overflow-x-auto`) —
+ * elle déborde dans une colonne étroite. En vertical, les jauges quota
+ * s'empilent, et la Tile coût + le bouton refresh passent sur une ligne
+ * dédiée en pleine largeur. Prop additive, défaut inchangé.
  */
-export function SubscriptionGauges() {
+export function SubscriptionGauges({ vertical = false }: { vertical?: boolean } = {}) {
   const [state, setState] = useState<GaugesState | null>(null);
   const mountedRef = useRef(true);
 
@@ -114,63 +120,82 @@ export function SubscriptionGauges() {
   const costSourcesEnabled = sources.filter((s) => s.kind === "cost" && s.enabled);
   const totalCostEur = state?.totalCostEur ?? 0;
 
+  // Rangée/colonne des jauges quota : chaque source a une largeur fixe (elle
+  // ne doit jamais se faire écraser en dessous du contenu de sa barre — c'est
+  // ce qui produisait un chevauchement de texte avec 2+ sources). En
+  // horizontal, si trop de sources pour la largeur dispo, ça scrolle ICI,
+  // sans jamais pousser la tuile coût ni le bouton hors champ. En vertical,
+  // pas de scroll : chaque jauge prend sa propre ligne en pleine largeur.
+  const gauges = quotaSources.map((s) => {
+    if (s.lastError) {
+      return <ErrorGauge key={s.id} label={s.name} error={s.lastError} />;
+    }
+    // lastPayload est une colonne jsonb NOT NULL, mais ça n'empêche pas
+    // la valeur JSON littérale `null` (update manuel en DB self-host) —
+    // chaînage optionnel avant `?? []`, jamais un accès direct.
+    const accounts = s.lastPayload?.accounts ?? [];
+    if (accounts.length === 0) return null; // pas encore de données exploitables
+    const segments: GaugeSegment[] = accounts.map((a) => ({
+      id: a.id,
+      percent: clampPercent(a.usedPercent ?? 0),
+      available: a.available ?? true,
+    }));
+    return (
+      <GaugeBar
+        key={s.id}
+        className="shrink-0"
+        label={s.name}
+        segments={segments}
+        reset={earliestReset(accounts)}
+      />
+    );
+  });
+
+  const costTile = (
+    <Tile
+      compact
+      className={vertical ? "min-w-0" : "ml-auto shrink-0"}
+      label="Coût / mois"
+      value={costSourcesEnabled.length === 0 ? "—" : formatCost(totalCostEur)}
+      hint={
+        costSourcesEnabled.length === 0 ? (
+          <a href="/settings/gauges" className="text-accent hover:underline">
+            configurer
+          </a>
+        ) : undefined
+      }
+    />
+  );
+
+  const refreshButton = (
+    <button
+      type="button"
+      onClick={() => load(true)}
+      aria-label="Rafraîchir les jauges"
+      title="Rafraîchir les jauges"
+      className="shrink-0 text-sm text-faint transition-colors duration-150 hover:text-ink"
+    >
+      ↻
+    </button>
+  );
+
+  if (vertical) {
+    return (
+      <div className="flex w-full flex-col gap-3">
+        <div className="flex flex-col gap-2">{gauges}</div>
+        <div className="flex items-center justify-between gap-2">
+          {costTile}
+          {refreshButton}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="hidden min-w-0 flex-1 items-center gap-6 md:flex">
-      {/* Rangée des jauges quota : chaque source a une largeur fixe (elle ne
-          doit jamais se faire écraser en dessous du contenu de sa barre —
-          c'est ce qui produisait un chevauchement de texte avec 2+ sources).
-          Si trop de sources pour la largeur dispo, ça scrolle ICI, sans
-          jamais pousser la tuile coût ni le bouton hors champ. */}
-      <div className="flex min-w-0 flex-1 items-center gap-6 overflow-x-auto">
-        {quotaSources.map((s) => {
-          if (s.lastError) {
-            return <ErrorGauge key={s.id} label={s.name} error={s.lastError} />;
-          }
-          // lastPayload est une colonne jsonb NOT NULL, mais ça n'empêche pas
-          // la valeur JSON littérale `null` (update manuel en DB self-host) —
-          // chaînage optionnel avant `?? []`, jamais un accès direct.
-          const accounts = s.lastPayload?.accounts ?? [];
-          if (accounts.length === 0) return null; // pas encore de données exploitables
-          const segments: GaugeSegment[] = accounts.map((a) => ({
-            id: a.id,
-            percent: clampPercent(a.usedPercent ?? 0),
-            available: a.available ?? true,
-          }));
-          return (
-            <GaugeBar
-              key={s.id}
-              className="shrink-0"
-              label={s.name}
-              segments={segments}
-              reset={earliestReset(accounts)}
-            />
-          );
-        })}
-      </div>
-
-      <Tile
-        compact
-        className="ml-auto shrink-0"
-        label="Coût / mois"
-        value={costSourcesEnabled.length === 0 ? "—" : formatCost(totalCostEur)}
-        hint={
-          costSourcesEnabled.length === 0 ? (
-            <a href="/settings/gauges" className="text-accent hover:underline">
-              configurer
-            </a>
-          ) : undefined
-        }
-      />
-
-      <button
-        type="button"
-        onClick={() => load(true)}
-        aria-label="Rafraîchir les jauges"
-        title="Rafraîchir les jauges"
-        className="shrink-0 text-sm text-faint transition-colors duration-150 hover:text-ink"
-      >
-        ↻
-      </button>
+      <div className="flex min-w-0 flex-1 items-center gap-6 overflow-x-auto">{gauges}</div>
+      {costTile}
+      {refreshButton}
     </div>
   );
 }
