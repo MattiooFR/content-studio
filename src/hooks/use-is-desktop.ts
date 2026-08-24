@@ -8,17 +8,17 @@ import { useEffect, useState } from "react";
 const QUERY = "(min-width: 1024px)";
 
 /**
- * Vrai si le viewport est ≥ `lg`. Défaut `true` côté serveur (pas de
- * `window`) : la majorité des sessions sont un poste de pilotage desktop, et
- * ce défaut évite un flash « tiroir » au premier rendu pour elles. Un client
- * mobile corrige la valeur dès son premier rendu (l'initialiseur lit
- * `matchMedia` directement, `window` existe déjà) puis à chaque changement de
- * largeur via l'abonnement posé en effet.
+ * Vrai si le viewport est ≥ `lg`. Initialisé à `true` INCONDITIONNELLEMENT
+ * (pas de lecture de `matchMedia` dans l'initialiseur) : le rendu d'hydration
+ * côté client doit reproduire EXACTEMENT le HTML déjà généré par le serveur
+ * (qui n'a pas de `window`, donc pas de vraie valeur) — lire la vraie valeur
+ * dès ce premier rendu ferait diverger l'arbre client de l'arbre serveur sur
+ * un viewport `< lg` et déclencherait un échec d'hydration React. La vraie
+ * valeur n'arrive qu'au montage, via l'effet ci-dessous (flash d'un tick,
+ * assumé) puis à chaque changement de largeur via l'abonnement `change`.
  */
 export function useIsDesktop(): boolean {
-  const [isDesktop, setIsDesktop] = useState(() =>
-    typeof window === "undefined" ? true : window.matchMedia(QUERY).matches
-  );
+  const [isDesktop, setIsDesktop] = useState(true);
 
   useEffect(() => {
     const mql = window.matchMedia(QUERY);
