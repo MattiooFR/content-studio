@@ -19,7 +19,13 @@ export function ViewSwitch({ view, onChange }: {
       className="flex items-center gap-1 rounded-full border border-line bg-raised p-0.5">
       {OPTIONS.map(({ value, label }) => (
         <button key={value} type="button" aria-pressed={view === value}
-          onClick={() => onChange(value)}
+          onClick={() => {
+            // Vue déjà active : rien à faire — surtout pas un nouveau
+            // pushState (workspace-url) qui empilerait une entrée d'historique
+            // inutile pour un clic qui ne change rien.
+            if (value === view) return;
+            onChange(value);
+          }}
           className={`rounded-full px-2.5 py-1 text-[11px] font-medium tracking-wider uppercase transition-colors duration-150 ${
             view === value ? "bg-accent-soft text-accent" : "text-muted hover:text-ink"
           }`}>

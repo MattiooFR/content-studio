@@ -23,6 +23,10 @@ export async function createContentDraft(p: {
     workspaceId: p.workspaceId, ideaId: p.ideaId, channelId: channel.id,
     personaId: p.personaId, type: channel.outputType,
   }).returning();
+  // Même événement que setContentStatus : un nouveau brouillon (« Décliner
+  // sur un canal », ou création agent) doit faire bouger liste/board en
+  // direct, pas seulement les changements de statut ultérieurs.
+  bus.publish(p.workspaceId, { type: "content.status", contentId: row.id, status: "draft" });
   return { contentId: row.id };
 }
 

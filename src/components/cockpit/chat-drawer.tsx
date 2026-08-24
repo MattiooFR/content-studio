@@ -244,6 +244,10 @@ type ChatDrawerCtx = {
   openLaneById: (laneId: string) => void;
   /** Crée/ouvre la lane titrée de ce contenu, avec son contexte pré-inséré dans le brouillon. */
   openForContent: (opts: { title: string; contentId: string }) => Promise<void>;
+  /** Champ additif (revue finale) : le drawer de chat est-il ouvert ? Sert au
+   * tiroir détail (detail-host.tsx) pour ignorer Échap quand le chat est
+   * au-dessus de lui — sinon Échap fermait le mauvais tiroir. */
+  isOpen: boolean;
 };
 
 const Ctx = createContext<ChatDrawerCtx | null>(null);
@@ -502,8 +506,8 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
     if (m) ensureMentionItems();
   }
 
-  const ctxValue = useMemo<ChatDrawerCtx>(() => ({ openGlobal, openLaneById, openForContent }), [
-    openGlobal, openLaneById, openForContent,
+  const ctxValue = useMemo<ChatDrawerCtx>(() => ({ openGlobal, openLaneById, openForContent, isOpen: open }), [
+    openGlobal, openLaneById, openForContent, open,
   ]);
 
   const activeMessages = activeLaneId ? (messagesByLane[activeLaneId] ?? []) : [];

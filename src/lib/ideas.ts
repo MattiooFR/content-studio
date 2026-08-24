@@ -1,6 +1,7 @@
 import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { ideas } from "@/lib/db/schema";
+import { bus } from "@/lib/events";
 
 type IdeaInput = {
   title: string; notes?: string; sourceUrl?: string;
@@ -52,6 +53,10 @@ export async function createIdea(workspaceId: string, input: IdeaInput) {
   if (input.tags !== undefined) values.tags = input.tags;
   if (input.createdBy !== undefined) values.createdBy = input.createdBy;
   const [row] = await db.insert(ideas).values(values as any).returning();
+  // Rend vivant l'abonnement `idea.created` déjà posé côté items-provider
+  // (spec §7) — appelé une seule fois ici, donc valable pour les deux
+  // créateurs d'idées : la route POST UI et l'outil MCP create_idea.
+  bus.publish(workspaceId, { type: "idea.created", ideaId: row.id });
   return row;
 }
 

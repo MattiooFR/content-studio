@@ -7,6 +7,7 @@
 import { useEffect, useRef } from "react";
 import { IdeaDetail } from "@/components/idea-detail";
 import { ContentDetail } from "@/components/content-detail";
+import { useChatDrawer } from "@/components/cockpit/chat-drawer";
 import type { WorkspaceItemRef } from "@/lib/workspace-url";
 
 // Sélecteur des éléments focusables du tiroir, pour le piège à focus manuel
@@ -23,17 +24,22 @@ export function DetailHost({ item, onOpenItem, onClose, mode }: {
   const drawerOpen = mode === "drawer" && item !== null;
   const asideRef = useRef<HTMLElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const { isOpen: chatOpen } = useChatDrawer();
 
   // Échap ferme le tiroir — écouteur actif SEULEMENT tant qu'il est ouvert,
-  // jamais en mode inline (où Échap n'a aucun sens).
+  // jamais en mode inline (où Échap n'a aucun sens). Le drawer de chat peut
+  // se superposer PAR-DESSUS ce tiroir (cockpit) : tant qu'il est ouvert,
+  // Échap doit d'abord lui appartenir — sinon un Échap destiné à fermer le
+  // chat fermait le tiroir détail en dessous, invisible à l'utilisateur.
   useEffect(() => {
     if (!drawerOpen) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape" || chatOpen) return;
+      onClose();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [drawerOpen, onClose]);
+  }, [drawerOpen, chatOpen, onClose]);
 
   // Focus déplacé à l'ouverture (et restauré à la fermeture) : sans ça, Tab
   // continue de parcourir les cartes du board sous l'overlay — un vrai trou
@@ -89,7 +95,7 @@ export function DetailHost({ item, onOpenItem, onClose, mode }: {
       <>
         <button aria-label="Fermer" onClick={onClose}
           className="fixed inset-0 z-40 bg-ink/25" />
-        <aside ref={asideRef} role="dialog" aria-modal="true" onKeyDown={trapTab}
+        <aside ref={asideRef} role="dialog" aria-modal="true" aria-label="Détail" onKeyDown={trapTab}
           className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl overflow-y-auto border-l border-line bg-bg shadow-2xl">
           <div className="sticky top-0 z-10 flex justify-end border-b border-line bg-bg/90 px-4 py-2 backdrop-blur">
             <button ref={closeBtnRef} type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm text-muted hover:bg-raised hover:text-ink">✕ Fermer</button>
