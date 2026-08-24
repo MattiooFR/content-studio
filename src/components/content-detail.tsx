@@ -1,0 +1,359 @@
+"use client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ContentEditor, type ContentEditorHandle } from "@/components/editor";
+import { ExportButton } from "@/components/export-button";
+import { StatusBadge } from "@/components/cockpit/status-badge";
+import { JobStatus } from "@/components/cockpit/job-status";
+import { useJobs } from "@/hooks/use-jobs";
+import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
+import { ProposedBanner } from "@/components/proposed-banner";
+import { RevisionsPanel, type Revision } from "@/components/revisions-panel";
+import { PublicationCard } from "@/components/cockpit/publication-card";
+import { useChatDrawer } from "@/components/cockpit/chat-drawer";
+import { ReviewPane } from "@/components/review/review-pane";
+import { useComments } from "@/components/review/use-comments";
+import type { WorkspaceItemRef } from "@/lib/workspace-url";
+
+type ContentWithChannel = {
+  id: string; body: string; status: string; currentRevisionId: string | null; ideaId: string;
+  channel: { name: string; key: string; constraints: { export_format?: string } };
+};
+
+const STATUSES = ["draft", "review", "approved", "published"] as const;
+
+export function ContentDetail({ contentId, onOpenItem }: { contentId: string; onOpenItem: (ref: WorkspaceItemRef) => void }) {
+  const { openForContent, openLaneById } = useChatDrawer();
+  const [content, setContent] = useState<ContentWithChannel | null>(null);
+  const [externalBody, setExternalBody] = useState<{ body: string; key: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // note = information non bloquante (ex: diff rafraîchi après un 409) — distincte
+  // de `error`, qui reste réservé aux échecs réels d'une action.
+  const [note, setNote] = useState<string | null>(null);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  // révisions écrites PAR CET ONGLET — pour ignorer ses propres événements SSE (Task 12)
+  const ownRevisions = useRef<Set<string>>(new Set());
+  // handle impératif vers l'éditeur : isEditing() (focus DOM) + flushSaves()
+  // (attend l'autosave en vol, y compris le debounce armé) — utilisé par
+  // resolve() ci-dessous. Round 3 : la page ne gate plus rien elle-même —
+  // le gate/rejeu d'un externalBody pendant l'édition est centralisé dans
+  // ContentEditor (voir editor.tsx, `pendingRef`) : moins de logique de
+  // focus/timing éparpillée entre deux fichiers, moins de bugs à chaque round.
+  const editorRef = useRef<ContentEditorHandle>(null);
+  const jobs = useJobs("content", contentId);
+  const publishJob = jobs.latest("publish");
+  const publishActive = publishJob?.status === "queued" || publishJob?.status === "running";
+
+  // Onglet courant. L'éditeur est DÉMONTÉ pendant la relecture (rendu
+  // conditionnel plus bas) : plus de focus, donc plus d'`editingUntil` — une
+  // révision agent produite pendant qu'on relit devient `current` et arrive
+  // ici par SSE, le ReviewPane se met à jour tout seul.
+  const [tab, setTab] = useState<"edit" | "review">("edit");
+  const reviseJob = jobs.latest("revise");
+  const reviseActive = reviseJob?.status === "queued" || reviseJob?.status === "running";
+  // Uniquement pour le compteur de l'onglet et l'activation du bouton
+  // « Appliquer les commentaires » : ReviewPane a sa propre instance du hook
+  // (acceptable en v1, cf. décision Task 15).
+  const { comments } = useComments(contentId);
+  const openCount = comments.filter((c) => c.status === "open").length;
+
+  // Quitter « Éditer » vide d'abord la file d'autosave : sans ça, le debounce
+  // encore armé tirerait sur un éditeur démonté (frappe perdue), et le
+  // ReviewPane afficherait un corps périmé d'une frappe.
+  async function goToTab(next: "edit" | "review") {
+    if (next === "review" && tab === "edit") await editorRef.current?.flushSaves();
+    setTab(next);
+  }
+
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/contents/${contentId}`);
+    if (res.ok) setContent(await res.json());
+  }, [contentId]);
+  useEffect(() => { load(); }, [load]);
+
+  const loadRevisions = useCallback(async () => {
+    const res = await fetch(`/api/contents/${contentId}/revisions`);
+    if (res.ok) setRevisions(await res.json());
+  }, [contentId]);
+  useEffect(() => { loadRevisions(); }, [loadRevisions]);
+
+  useWorkspaceEvents((e) => {
+    if (e.type !== "content.updated" || e.contentId !== contentId) return;
+    if (ownRevisions.current.has(e.revisionId)) return; // notre propre save (fast-path)
+    if (e.state === "current") {
+      // écriture devenue courante (agent ou user tiers) → refetch et pousse
+      // à l'éditeur, point. Round 3 : la page ne décide plus QUAND appliquer
+      // ce corps (focus, blur, stash...) — c'est ContentEditor qui gate en
+      // interne si besoin (`pendingRef`) et rejoue au bon moment. La page se
+      // contente de fournir la donnée la plus fraîche à chaque event.
+      fetch(`/api/contents/${contentId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((c) => {
+          if (!c) {
+            setError("Échec du rafraîchissement du contenu après une mise à jour distante.");
+            return;
+          }
+          setContent(c);
+          setExternalBody({ body: c.body, key: Date.now() });
+        })
+        .catch(() => {
+          setError("Échec du rafraîchissement du contenu après une mise à jour distante.");
+        });
+    }
+    loadRevisions(); // dans tous les cas (une proposed apparaît dans la liste)
+  });
+
+  async function setStatus(status: string) {
+    const res = await fetch(`/api/contents/${contentId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      setError("Échec du changement de statut. Réessaie.");
+      return;
+    }
+    setError(null);
+    load();
+  }
+
+  async function resolve(revId: string, action: "accept" | "reject") {
+    setError(null);
+    setNote(null);
+
+    let expectedCurrentRevisionId = content?.currentRevisionId ?? null;
+
+    if (action === "accept") {
+      // Sérialise l'accept derrière tout autosave en vol/enchaîné (file à un
+      // slot de la Task 11) : sans ça, un save utilisateur qui commit APRÈS
+      // l'accept écrase silencieusement la version acceptée — l'écriture user
+      // ne porte aucune garde de fraîcheur côté serveur (décision actée :
+      // l'autosave doit rester fluide, la protection est ici, côté client).
+      await editorRef.current?.flushSaves();
+
+      let fresh: ContentWithChannel | null;
+      try {
+        const r = await fetch(`/api/contents/${contentId}`);
+        fresh = r.ok ? await r.json() : null;
+      } catch {
+        setError("Échec du rechargement du contenu avant résolution. Réessaie.");
+        return;
+      }
+      if (!fresh) {
+        setError("Échec du rechargement du contenu avant résolution. Réessaie.");
+        return;
+      }
+
+      if (fresh.currentRevisionId !== expectedCurrentRevisionId) {
+        // le flush (ou une autre écriture arrivée entre-temps) a fait bouger
+        // le contenu : ne PAS résoudre avec un expectedCurrentRevisionId
+        // périmé — même traitement que le 409 serveur (note, pas erreur),
+        // on remonte le diff frais plutôt que d'écraser à l'aveugle.
+        setContent(fresh);
+        setExternalBody({ body: fresh.body, key: Date.now() });
+        setNote("Le contenu a changé entre-temps : diff rafraîchi.");
+        loadRevisions();
+        return;
+      }
+      expectedCurrentRevisionId = fresh.currentRevisionId;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`/api/contents/${contentId}/revisions/${revId}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // La révision courante que CE rendu affichait (rafraîchie juste au-dessus
+        // pour un accept) : si le contenu a quand même bougé depuis (écriture
+        // agent concurrente), le serveur répond 409 et on recharge le diff au
+        // lieu d'écraser à l'aveugle — filet serveur, en plus du flush client.
+        body: JSON.stringify({ action, expectedCurrentRevisionId }),
+      });
+    } catch {
+      setError("Échec réseau lors de la résolution de la proposition. Réessaie.");
+      return;
+    }
+    if (res.status === 409) {
+      // pas une erreur : la proposition était périmée, le serveur n'a rien écrasé.
+      setNote("Le contenu a changé entre-temps : diff rafraîchi.");
+    } else if (!res.ok) {
+      setError("Échec de l'action sur la proposition. Réessaie.");
+      return;
+    }
+    // succès ou 409 : dans les deux cas l'état serveur fait foi, on recharge.
+    try {
+      const r = await fetch(`/api/contents/${contentId}`);
+      const c = r.ok ? await r.json() : null;
+      if (c) {
+        setContent(c);
+        setExternalBody({ body: c.body, key: Date.now() });
+      } else {
+        setError("Échec du rechargement du contenu après résolution.");
+      }
+    } catch {
+      setError("Échec du rechargement du contenu après résolution.");
+    }
+    loadRevisions();
+  }
+
+  async function restore(rev: Revision) {
+    setError(null);
+    setNote(null);
+    // Restaurer = créer une NOUVELLE révision courante avec le corps de
+    // l'ancienne — via le PATCH existant (authorType "user", même chemin
+    // qu'un autosave). Aucun endpoint dédié : le cœur applyContentUpdate
+    // fait déjà tout (supersede la current, insère la nouvelle).
+    let res: Response;
+    try {
+      res = await fetch(`/api/contents/${contentId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ body: rev.body }),
+      });
+    } catch {
+      setError("Échec réseau lors de la restauration de la révision. Réessaie.");
+      return;
+    }
+    if (!res.ok) {
+      setError("Échec de la restauration de la révision. Réessaie.");
+      return;
+    }
+    try {
+      const r = await fetch(`/api/contents/${contentId}`);
+      const c = r.ok ? await r.json() : null;
+      if (c) {
+        setContent(c);
+        setExternalBody({ body: c.body, key: Date.now() });
+      } else {
+        setError("Échec du rechargement du contenu après restauration.");
+      }
+    } catch {
+      setError("Échec du rechargement du contenu après restauration.");
+    }
+    loadRevisions();
+  }
+
+  if (!content) return <p className="text-sm text-muted">Chargement…</p>;
+
+  const proposed = revisions.find((r) => r.state === "proposed");
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <h2 className="truncate text-lg font-semibold tracking-tight">
+            {content.channel.name}
+          </h2>
+          <StatusBadge kind="content" value={content.status} />
+          <button type="button" className="text-xs text-muted underline-offset-2 hover:underline" onClick={() => onOpenItem({ type: "idea", id: content.ideaId })}>← Idée</button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-full border border-line bg-raised p-0.5">
+            {STATUSES.map((s) => (
+              <button key={s} onClick={() => setStatus(s)}
+                className={`rounded-full px-2.5 py-1 text-[11px] font-medium tracking-wider uppercase transition-colors duration-150 ${
+                  s === content.status
+                    ? "bg-accent-soft text-accent"
+                    : "text-muted hover:text-ink"
+                }`}>
+                {s}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setStatus("rejected")}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium tracking-wider uppercase transition-colors duration-150 ${
+              content.status === "rejected"
+                ? "border-danger/30 bg-danger/10 text-danger"
+                : "border-line bg-raised text-muted hover:border-danger/30 hover:text-danger"
+            }`}>
+            Rejeter
+          </button>
+          <ExportButton body={content.body}
+            format={content.channel.constraints.export_format ?? "markdown"} />
+          <button
+            type="button"
+            disabled={publishActive || !content.body.trim()}
+            onClick={async () => { await jobs.create("publish"); load(); }}
+            className="rounded-full border border-accent/40 bg-accent-soft px-2.5 py-1 text-[11px] font-medium tracking-wider text-accent uppercase transition-colors duration-150 hover:border-accent disabled:opacity-50"
+          >
+            Publier
+          </button>
+          <button
+            type="button"
+            onClick={() => openForContent({
+              // titre STABLE par contenu (pas juste par canal) : c'est la clé
+              // que openForContent utilise pour retrouver/recréer LA MÊME
+              // lane à chaque clic, plutôt que d'en empiler une nouvelle.
+              title: `${content.channel.name} — ${contentId.slice(0, 8)}`,
+              contentId,
+            })}
+            className="rounded-full border border-line bg-raised px-2.5 py-1 text-[11px] font-medium tracking-wider text-muted uppercase transition-colors duration-150 hover:border-line-strong hover:text-ink"
+          >
+            💬 Chat
+          </button>
+        </div>
+      </div>
+      <JobStatus
+        job={publishJob} onRetry={jobs.retry} onCancel={jobs.cancel}
+        renderDone={(j) => typeof j.result.url === "string"
+          ? <a className="underline" href={j.result.url} target="_blank" rel="noreferrer">Publié → voir</a>
+          : "Publié"}
+      />
+      {jobs.error && <p className="text-sm text-danger">{jobs.error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
+      {note && <p className="text-sm text-muted">{note}</p>}
+      {proposed && (
+        <ProposedBanner
+          currentBody={content.body}
+          proposedBody={proposed.body}
+          onResolve={(action) => resolve(proposed.id, action)}
+        />
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {(["edit", "review"] as const).map((t) => (
+          <button key={t} type="button" onClick={() => goToTab(t)}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors duration-150 ${
+              tab === t ? "bg-accent-soft text-accent" : "text-muted hover:text-ink"
+            }`}>
+            {t === "edit" ? "Éditer" : `Relire${openCount ? ` (${openCount})` : ""}`}
+          </button>
+        ))}
+        <button
+          type="button"
+          disabled={!openCount || reviseActive}
+          onClick={() => jobs.create("revise")}
+          className="ml-auto rounded-full border border-line bg-raised px-2.5 py-1 text-[11px] font-medium tracking-wider text-muted uppercase transition-colors duration-150 hover:border-line-strong disabled:opacity-50"
+        >
+          Appliquer les commentaires
+        </button>
+        <JobStatus job={reviseJob} onRetry={jobs.retry} onCancel={jobs.cancel}
+          renderDone={() => "Commentaires appliqués"} />
+      </div>
+      {tab === "review" ? (
+        <ReviewPane contentId={contentId} body={content.body} />
+      ) : (
+        <ContentEditor
+          ref={editorRef}
+          contentId={contentId}
+          initialBody={content.body}
+          externalBody={externalBody}
+          onSaved={(revisionId, body) => {
+            ownRevisions.current.add(revisionId);
+            // Sans ceci, content.currentRevisionId/body restaient figés sur la
+            // révision PRÉCÉDENTE jusqu'au prochain refetch externe (le fast-path
+            // SSE ci-dessus ignore cette révision, donc rien ne rafraîchissait
+            // l'état) : le bandeau de proposition diffait contre un corps périmé,
+            // et resolve() capturait un expectedCurrentRevisionId périmé → un
+            // accept juste après un save propre rebondissait systématiquement en
+            // "diff rafraîchi" au premier clic.
+            setContent((prev) => prev ? { ...prev, currentRevisionId: revisionId, body } : prev);
+          }}
+        />
+      )}
+      <RevisionsPanel
+        revisions={revisions} currentBody={content.body} onRestore={restore}
+        onOpenLane={openLaneById}
+      />
+      <PublicationCard contentId={contentId} bodyKey={content.currentRevisionId ?? ""} />
+    </div>
+  );
+}
