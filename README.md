@@ -11,6 +11,37 @@ abonnement IA travaille, l'outil orchestre.
     BETTER_AUTH_SECRET=$(openssl rand -hex 32) docker compose up -d --build
     # http://localhost:3003 → créer un compte (workspace + 3 canaux créés automatiquement)
 
+## Interface
+
+`/` est un shell un-écran : sidebar de buckets à gauche, vue liste ou board au
+centre, volet détail à droite (ou tiroir par-dessus, selon le contexte).
+Cliquer un item change le volet, jamais la page — aucune navigation ne
+recharge le site.
+
+- **Sidebar** — 4 buckets avec compteur vivant (À traiter, En rédaction,
+  Publiés, Écartés) puis les réglages (Jauges, Tokens MCP, Lanes). `< lg` elle
+  se replie en une barre compacte (logo + bouton menu) qui l'ouvre en overlay
+  par-dessus le contenu (Échap ou clic hors sidebar referme).
+- **Vue liste** (défaut) — une ligne par item du bucket courant, plus « Nouvelle
+  idée » en tête. Sur desktop (`≥ lg`) le volet détail reste inline à droite ;
+  en dessous, la liste prend toute la largeur et le même volet s'ouvre en
+  tiroir plein écran. Clavier : `j`/`k` déplacent la sélection dans la liste
+  (ignorés pendant une saisie dans un champ, ou tiroir ouvert).
+- **Vue board** — switch en tête de colonne, 5 colonnes par étape (Proposé,
+  Rédaction, Relecture, Prêt, Publié — Écarté n'a pas de colonne, il reste
+  accessible via le bucket du même nom en vue liste), scroll horizontal sur
+  petit écran. Cliquer une carte ouvre le même volet détail (fiche idée ou
+  fiche contenu) dans un tiroir par-dessus le board.
+- **Deep-linking** — tout l'état visible vit dans l'URL de `/` :
+  `?view=list|board`, `?bucket=todo|writing|published|discarded`,
+  `?item=idea:<uuid>` ou `?item=content:<uuid>`. Recharger ou partager l'URL
+  reproduit l'écran exact ; une valeur absente ou inconnue retombe sur le
+  défaut (vue liste, bucket « À traiter », pas d'item ouvert).
+- **Anciennes routes** — `/ideas/[id]` et `/contents/[id]` redirigent vers
+  l'équivalent `/?item=idea:<id>` / `/?item=content:<id>` : les liens déjà
+  envoyés par le worker (« Brouillon prêt → ouvrir ») ou mis en favori
+  continuent de marcher.
+
 ## Sécurité / déploiement
 
 **Par défaut, l'app n'écoute QUE sur `127.0.0.1`** — `npm run dev` et `npm run start`

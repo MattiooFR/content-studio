@@ -2,7 +2,7 @@
 // La salle de tri : liste à gauche, fiche à droite, tout l'état dans l'URL.
 // Aucun state local de navigation — recharger ou partager l'URL reproduit
 // l'écran exact.
-import { Suspense, useCallback, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { useWorkspaceItems } from "@/components/workspace/items-provider";
 import { ItemList } from "@/components/workspace/item-list";
@@ -10,6 +10,7 @@ import { Board } from "@/components/workspace/board";
 import { ViewSwitch } from "@/components/workspace/view-switch";
 import { DetailHost } from "@/components/workspace/detail-host";
 import { FunnelLine } from "@/components/cockpit/funnel-line";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { stageOf, bucketOfStage, BUCKET_STAGES, primaryContentOf } from "@/lib/stage";
 import { cn } from "@/lib/utils";
 import {
@@ -77,15 +78,47 @@ function Workspace() {
   }, [items, state.item]);
 
   const isBoard = state.view === "board";
+  // Volet inline seulement en vue liste sur desktop (≥ lg) : en board, ou sous
+  // `lg`, le même `DetailHost` bascule en tiroir — un seul montage possible,
+  // piloté par ce booléen JS (pas de media query CSS, cf. hook + brief §8).
+  const isDesktop = useIsDesktop();
+  const detailMode: "inline" | "drawer" = isBoard || !isDesktop ? "drawer" : "inline";
+
+  // Clavier j/k : parcourt `visible` dans la vue liste (spec §8). Inerte en
+  // vue board, avec le tiroir mobile ouvert (l'utilisateur est dans la fiche,
+  // pas dans la liste) ou pendant une saisie — sinon taper un titre commençant
+  // par « j » ou « k » ferait sauter la sélection sous les doigts.
+  useEffect(() => {
+    if (isBoard) return;
+    const drawerOpen = detailMode === "drawer" && state.item !== null;
+    function isEditableTarget(el: Element | null): boolean {
+      if (!el) return false;
+      if (el instanceof HTMLElement && el.isContentEditable) return true;
+      return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "j" && e.key !== "k") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (drawerOpen) return;
+      if (isEditableTarget(document.activeElement)) return;
+      if (visible.length === 0) return;
+      const idx = visible.findIndex((it) => it.id === selectedIdeaId);
+      const step = e.key === "j" ? 1 : -1;
+      const nextIdx = idx < 0 ? 0 : Math.min(Math.max(idx + step, 0), visible.length - 1);
+      selectIdea(visible[nextIdx].id);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isBoard, detailMode, state.item, visible, selectedIdeaId, selectIdea]);
 
   return (
     <div className="flex h-full min-h-0">
-      {/* Vue board : cette colonne prend toute la largeur, pas de volet inline
-          à côté (spec §2) — le détail s'ouvre en tiroir par-dessus (DetailHost
-          mode="drawer" ci-dessous, position fixed donc hors du flux). */}
+      {/* Volet inline à côté seulement en `detailMode === "inline"` (liste,
+          desktop) : sinon (board, ou liste `< lg`) cette colonne prend toute
+          la largeur, le détail s'ouvrant en tiroir par-dessus (spec §2/§8). */}
       <section className={cn(
         "flex min-h-0 flex-col",
-        isBoard ? "w-full" : "w-80 shrink-0 border-r border-line"
+        detailMode === "inline" ? "w-80 shrink-0 border-r border-line" : "w-full"
       )}>
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-4 py-2">
           <ViewSwitch view={state.view} onChange={changeView} />
@@ -110,13 +143,12 @@ function Workspace() {
           />
         )}
       </section>
-      {!isBoard && (
+      {detailMode === "inline" ? (
         <section className="min-w-0 flex-1 overflow-y-auto">
           <DetailHost item={state.item} mode="inline"
             onOpenItem={(ref) => openItem(ref)} onClose={() => openItem(null)} />
         </section>
-      )}
-      {isBoard && (
+      ) : (
         <DetailHost item={state.item} mode="drawer"
           onOpenItem={(ref) => openItem(ref)} onClose={() => openItem(null)} />
       )}
