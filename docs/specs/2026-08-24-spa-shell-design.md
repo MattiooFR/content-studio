@@ -43,7 +43,7 @@ dérivée, jamais stockée — fonction pure `stageOf(idea, contents, lastJobSta
 | Étape (`Stage`) | Règle (première qui matche, de haut en bas) |
 |---|---|
 | `discarded` | idée `archived`, ou tous ses contenus `rejected` (au moins un contenu) |
-| `published` | au moins un contenu `published` |
+| `published` | au moins un contenu `published`, ou idée `done` |
 | `ready` | au moins un contenu `approved` |
 | `review` | au moins un contenu `review` |
 | `writing` | au moins un contenu `generating`/`draft`, ou dernier job `queued`/`running`, ou idée `in_progress` |
