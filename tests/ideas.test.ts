@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createIdea, listIdeas, getIdea } from "@/lib/ideas";
 import { createPersona, listPersonas } from "@/lib/personas";
 import { createJob } from "@/lib/jobs";
+import { createContentDraft } from "@/lib/contents";
 import { signUpTestUser } from "./helpers";
 
 describe("ideas — cloisonnement workspace", () => {
@@ -55,5 +56,23 @@ describe("ideas — cloisonnement workspace", () => {
     const rows = await listIdeas(ws.workspaceId);
     expect(rows.find((r) => r.id === idea.id)!.lastJobStatus).toBe("queued");
     expect(rows.find((r) => r.id === sans.id)!.lastJobStatus).toBeNull();
+  });
+
+  it("listIdeas agrège les contenus de l'idée (id, status, channelKey), [] sinon", async () => {
+    const ws = await signUpTestUser();
+    const ideaAvecContenu = await createIdea(ws.workspaceId, { title: "Avec contenu" });
+    const ideaSans = await createIdea(ws.workspaceId, { title: "Sans contenu" });
+    const { contentId } = await createContentDraft({
+      workspaceId: ws.workspaceId, ideaId: ideaAvecContenu.id, channelKey: "community",
+    });
+
+    const rows = await listIdeas(ws.workspaceId);
+
+    const withContent = rows.find((r) => r.id === ideaAvecContenu.id)!;
+    expect(withContent.contents).toEqual([
+      { id: contentId, status: "draft", channelKey: expect.any(String) },
+    ]);
+    const sans = rows.find((r) => r.id === ideaSans.id)!;
+    expect(sans.contents).toEqual([]);
   });
 });

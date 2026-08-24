@@ -23,6 +23,16 @@ export async function listIdeas(workspaceId: string, status?: string) {
       sourcesCount: sql<number>`(select count(*)::int from sources s where s.idea_id = ideas.id)`,
       // idem : dernier job (tous kinds confondus) visant cette idée, null si aucun.
       lastJobStatus: sql<string | null>`(select j.status from agent_jobs j where j.target_type = 'idea' and j.target_id = ideas.id order by j.created_at desc limit 1)`,
+      // agrégat des contenus de l'idée pour la dérivation d'étape côté client
+      // (lib stage) — même piège de qualification que ci-dessus : identifiants
+      // écrits À LA MAIN, jamais interpolés depuis les objets drizzle.
+      contents: sql<{ id: string; status: string; channelKey: string }[]>`(
+        select coalesce(json_agg(json_build_object(
+          'id', c.id, 'status', c.status, 'channelKey', ch.key
+        ) order by c.created_at), '[]'::json)
+        from contents c join channels ch on ch.id = c.channel_id
+        where c.idea_id = ideas.id
+      )`,
     })
     .from(ideas)
     .where(where)
