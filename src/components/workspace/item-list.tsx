@@ -8,20 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useWorkspaceItems, type WorkspaceItem } from "@/components/workspace/items-provider";
-import { stageOf, BUCKET_LABELS, STAGE_LABELS, type Bucket, type Stage } from "@/lib/stage";
+import { stageOf, BUCKET_LABELS, STAGE_LABELS, STAGE_TONE, type Bucket, type Stage } from "@/lib/stage";
 import { cn } from "@/lib/utils";
-
-// Teintes alignées sur StatusBadge (contrat W1) : un statut = une couleur dans
-// toute l'app. Les étapes sont un concept nouveau (dérivé), d'où des classes
-// locales — mais elles reprennent exactement les tons du badge.
-const STAGE_TONE: Record<Stage, string> = {
-  proposed: "border-line bg-raised text-muted",
-  writing: "border-accent/40 bg-accent-soft text-accent",
-  review: "border-warning/30 bg-warning/10 text-warning",
-  ready: "border-success/30 bg-success/10 text-success",
-  published: "border-success/30 bg-success/10 text-success",
-  discarded: "border-line bg-raised text-faint",
-};
 
 const EMPTY_MESSAGE: Record<Bucket, string> = {
   todo: "Rien à traiter 🎉",
@@ -31,12 +19,13 @@ const EMPTY_MESSAGE: Record<Bucket, string> = {
 };
 
 // Date relative courte, sans dépendance : « il y a 3 j », « hier », « à l'instant ».
+// Exportée : le board (Task 8) affiche la même méta sur ses cartes.
 const RTF = new Intl.RelativeTimeFormat("fr", { numeric: "auto", style: "short" });
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["year", 31_536_000], ["month", 2_592_000], ["week", 604_800],
   ["day", 86_400], ["hour", 3_600], ["minute", 60],
 ];
-function relativeDate(iso: string): string {
+export function relativeDate(iso: string): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "";
   const diff = (t - Date.now()) / 1000; // négatif = passé
@@ -47,7 +36,9 @@ function relativeDate(iso: string): string {
   return "à l'instant";
 }
 
-function StagePill({ stage }: { stage: Stage }) {
+// Exportée : les cartes du board (Task 8) réutilisent EXACTEMENT la même
+// pilule que les lignes de la liste, plutôt que d'en dupliquer une variante.
+export function StagePill({ stage }: { stage: Stage }) {
   return (
     <span className={cn(
       "inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-widest whitespace-nowrap uppercase",

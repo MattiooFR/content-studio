@@ -6,9 +6,12 @@ import { Suspense, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { useWorkspaceItems } from "@/components/workspace/items-provider";
 import { ItemList } from "@/components/workspace/item-list";
+import { Board } from "@/components/workspace/board";
+import { ViewSwitch } from "@/components/workspace/view-switch";
 import { DetailHost } from "@/components/workspace/detail-host";
 import { FunnelLine } from "@/components/cockpit/funnel-line";
 import { stageOf, bucketOfStage, BUCKET_STAGES, primaryContentOf } from "@/lib/stage";
+import { cn } from "@/lib/utils";
 import {
   parseWorkspaceState, serializeWorkspaceState,
   type WorkspaceState, type WorkspaceItemRef,
@@ -30,6 +33,12 @@ function Workspace() {
 
   const openItem = useCallback((ref: WorkspaceItemRef | null) => {
     apply({ ...state, item: ref });
+  }, [apply, state]);
+
+  // Changement de vue = pushState : le bouton retour du navigateur revient à
+  // la vue précédente (contrairement à la sélection, qui ne pousse jamais).
+  const changeView = useCallback((view: WorkspaceState["view"]) => {
+    apply({ ...state, view }, true);
   }, [apply, state]);
 
   // Clic sur un item de liste, ou idée qu'on vient de créer : on ouvre son
@@ -67,9 +76,20 @@ function Workspace() {
     return parent?.id ?? null;
   }, [items, state.item]);
 
+  const isBoard = state.view === "board";
+
   return (
     <div className="flex h-full min-h-0">
-      <section className="flex w-80 shrink-0 flex-col border-r border-line">
+      {/* Vue board : cette colonne prend toute la largeur, pas de volet inline
+          à côté (spec §2) — le détail s'ouvre en tiroir par-dessus (DetailHost
+          mode="drawer" ci-dessous, position fixed donc hors du flux). */}
+      <section className={cn(
+        "flex min-h-0 flex-col",
+        isBoard ? "w-full" : "w-80 shrink-0 border-r border-line"
+      )}>
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-4 py-2">
+          <ViewSwitch view={state.view} onChange={changeView} />
+        </div>
         {/* Le pipeline reste consultable mais replié : dans une colonne de 320px
             il mangeait la liste, qui est l'objet de l'écran. */}
         <details className="shrink-0 border-b border-line">
@@ -78,15 +98,28 @@ function Workspace() {
           </summary>
           <div className="px-4 pb-3"><FunnelLine /></div>
         </details>
-        <ItemList
-          items={visible} bucket={state.bucket} loaded={loaded}
-          selectedId={selectedIdeaId} onSelect={selectIdea}
-        />
+        {isBoard ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* Le board ignore `bucket` : `items` (non filtré), jamais `visible`. */}
+            <Board items={items} selectedId={selectedIdeaId} onSelect={selectIdea} />
+          </div>
+        ) : (
+          <ItemList
+            items={visible} bucket={state.bucket} loaded={loaded}
+            selectedId={selectedIdeaId} onSelect={selectIdea}
+          />
+        )}
       </section>
-      <section className="min-w-0 flex-1 overflow-y-auto">
-        <DetailHost item={state.item} mode="inline"
+      {!isBoard && (
+        <section className="min-w-0 flex-1 overflow-y-auto">
+          <DetailHost item={state.item} mode="inline"
+            onOpenItem={(ref) => openItem(ref)} onClose={() => openItem(null)} />
+        </section>
+      )}
+      {isBoard && (
+        <DetailHost item={state.item} mode="drawer"
           onOpenItem={(ref) => openItem(ref)} onClose={() => openItem(null)} />
-      </section>
+      )}
     </div>
   );
 }

@@ -55,6 +55,30 @@ export const STAGE_LABELS: Record<Stage, string> = {
   discarded: "Écarté",
 };
 
+// Teinte partagée de l'étape (contrat W1, alignée sur StatusBadge) : la
+// pilule de la liste (item-list.tsx) ET la carte du board (board.tsx)
+// utilisent EXACTEMENT les mêmes classes — un statut = une couleur, jamais
+// deux palettes qui divergent avec le temps.
+export const STAGE_TONE: Record<Stage, string> = {
+  proposed: "border-line bg-raised text-muted",
+  writing: "border-accent/40 bg-accent-soft text-accent",
+  review: "border-warning/30 bg-warning/10 text-warning",
+  ready: "border-success/30 bg-success/10 text-success",
+  published: "border-success/30 bg-success/10 text-success",
+  discarded: "border-line bg-raised text-faint",
+};
+
+// Point de couleur compact (en-tête de colonne du board) — même palette que
+// STAGE_TONE, réduite à un point plein.
+export const STAGE_DOT: Record<Stage, string> = {
+  proposed: "bg-line-strong",
+  writing: "bg-accent",
+  review: "bg-warning",
+  ready: "bg-success",
+  published: "bg-success",
+  discarded: "bg-faint",
+};
+
 // Le contenu qu'on ouvre quand on clique l'item : le plus avancé.
 // rejected est volontairement absent : un item écarté rouvre sa fiche idée.
 const CONTENT_PRIORITY = ["published", "approved", "review", "generating", "draft"];
