@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  stageOf, primaryContentOf, countsByBucket, BUCKET_STAGES,
+  stageOf, primaryContentOf, countsByBucket, bucketOfStage, BUCKET_STAGES,
 } from "@/lib/stage";
 
 const c = (status: string) => ({ id: `id-${status}`, status, channelKey: "community" });
@@ -75,5 +75,16 @@ describe("BUCKET_STAGES", () => {
   it("couvre les 6 étapes sans doublon", () => {
     const all = Object.values(BUCKET_STAGES).flat().sort();
     expect(all).toEqual(["discarded", "proposed", "published", "ready", "review", "writing"].sort());
+  });
+});
+
+describe("bucketOfStage", () => {
+  it("chaque étape retombe dans le bucket qui la contient", () => {
+    expect(bucketOfStage("proposed")).toBe("todo");
+    expect(bucketOfStage("review")).toBe("todo");
+    expect(bucketOfStage("ready")).toBe("todo");
+    expect(bucketOfStage("writing")).toBe("writing");
+    expect(bucketOfStage("published")).toBe("published");
+    expect(bucketOfStage("discarded")).toBe("discarded");
   });
 });

@@ -8,7 +8,7 @@ import { useWorkspaceItems } from "@/components/workspace/items-provider";
 import { ItemList } from "@/components/workspace/item-list";
 import { DetailHost } from "@/components/workspace/detail-host";
 import { FunnelLine } from "@/components/cockpit/funnel-line";
-import { stageOf, BUCKET_STAGES, primaryContentOf } from "@/lib/stage";
+import { stageOf, bucketOfStage, BUCKET_STAGES, primaryContentOf } from "@/lib/stage";
 import {
   parseWorkspaceState, serializeWorkspaceState,
   type WorkspaceState, type WorkspaceItemRef,
@@ -32,12 +32,27 @@ function Workspace() {
     apply({ ...state, item: ref });
   }, [apply, state]);
 
-  // clic sur un item de liste : on ouvre son contenu le plus avancé, sinon l'idée
+  // Clic sur un item de liste, ou idée qu'on vient de créer : on ouvre son
+  // contenu le plus avancé, sinon l'idée — ET le bucket SUIT la sélection.
+  // Sans ça, créer une idée depuis « En rédaction » ouvrait bien sa fiche mais
+  // la ligne atterrissait dans « À traiter », invisible et compteur immobile :
+  // on croyait l'envoi raté. Un item absent de `items` est une idée tout juste
+  // créée (le provider n'a pas encore rechargé) : elle est forcément `proposed`.
+  // Les URLs tapées à la main ne sont PAS corrigées au chargement — seule une
+  // sélection explicite déplace le bucket.
   const selectIdea = useCallback((ideaId: string) => {
     const it = items.find((i) => i.id === ideaId);
     const primary = it ? primaryContentOf(it.contents) : null;
-    openItem(primary ? { type: "content", id: primary.id } : { type: "idea", id: ideaId });
-  }, [items, openItem]);
+    const stage = it
+      ? stageOf(it.status, it.contents, it.lastJobStatus)
+      : stageOf("inbox", [], null);
+    // Un seul apply() : bucket et item changent dans la même écriture d'URL.
+    apply({
+      ...state,
+      bucket: bucketOfStage(stage),
+      item: primary ? { type: "content", id: primary.id } : { type: "idea", id: ideaId },
+    });
+  }, [items, apply, state]);
 
   const visible = useMemo(() => {
     const stages = BUCKET_STAGES[state.bucket];

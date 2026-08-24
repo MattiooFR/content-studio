@@ -31,6 +31,14 @@ export const BUCKET_STAGES: Record<Bucket, Stage[]> = {
   discarded: ["discarded"],
 };
 
+// Inverse de BUCKET_STAGES : une étape appartient à exactement un bucket
+// (garanti par le test « couvre les 6 étapes sans doublon »). Sert à faire
+// SUIVRE le bucket quand on ouvre un item, pour qu'il soit toujours visible
+// dans la liste où on l'a sélectionné.
+export function bucketOfStage(stage: Stage): Bucket {
+  return (Object.keys(BUCKET_STAGES) as Bucket[]).find((b) => BUCKET_STAGES[b].includes(stage))!;
+}
+
 export const BUCKET_LABELS: Record<Bucket, string> = {
   todo: "À traiter",
   writing: "En rédaction",
@@ -61,10 +69,7 @@ export function primaryContentOf(contents: ItemContent[]): ItemContent | null {
 export function countsByBucket(items: StageInput[]): Record<Bucket, number> {
   const counts: Record<Bucket, number> = { todo: 0, writing: 0, published: 0, discarded: 0 };
   for (const it of items) {
-    const stage = stageOf(it.status, it.contents, it.lastJobStatus);
-    const bucket = (Object.keys(BUCKET_STAGES) as Bucket[])
-      .find((b) => BUCKET_STAGES[b].includes(stage))!;
-    counts[bucket] += 1;
+    counts[bucketOfStage(stageOf(it.status, it.contents, it.lastJobStatus))] += 1;
   }
   return counts;
 }
