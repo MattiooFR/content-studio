@@ -1,16 +1,7 @@
-"use client";
-import { use } from "react";
-import { useRouter } from "next/navigation";
-import { IdeaDetail } from "@/components/idea-detail";
+import { redirect } from "next/navigation";
 
-export default function IdeaPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
-  const router = useRouter();
-  return (
-    <IdeaDetail
-      ideaId={id}
-      onOpenItem={(ref) =>
-        router.push(ref.type === "content" ? `/contents/${ref.id}` : `/ideas/${ref.id}`)}
-    />
-  );
+// Ancienne route conservée pour les liens existants (jobs, worker, favoris).
+export default async function IdeaRedirect({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  redirect(`/?item=idea:${id}`);
 }

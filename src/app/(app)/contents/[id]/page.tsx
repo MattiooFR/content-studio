@@ -1,16 +1,7 @@
-"use client";
-import { use } from "react";
-import { useRouter } from "next/navigation";
-import { ContentDetail } from "@/components/content-detail";
+import { redirect } from "next/navigation";
 
-export default function ContentPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
-  const router = useRouter();
-  return (
-    <ContentDetail
-      contentId={id}
-      onOpenItem={(ref) =>
-        router.push(ref.type === "content" ? `/contents/${ref.id}` : `/ideas/${ref.id}`)}
-    />
-  );
+// Ancienne route conservée pour les liens existants (jobs, worker, favoris).
+export default async function ContentRedirect({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  redirect(`/?item=content:${id}`);
 }
