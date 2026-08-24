@@ -12,7 +12,7 @@ import type { WorkspaceItemRef } from "@/lib/workspace-url";
 // Sélecteur des éléments focusables du tiroir, pour le piège à focus manuel
 // (pas de lib externe — juste Tab/Shift+Tab bouclés entre premier et dernier).
 const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [contenteditable], [tabindex]:not([tabindex="-1"])';
 
 export function DetailHost({ item, onOpenItem, onClose, mode }: {
   item: WorkspaceItemRef | null;
