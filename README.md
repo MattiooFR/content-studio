@@ -393,6 +393,52 @@ texte exécuté par le shell, donc incapable d'en ouvrir une nouvelle commande.
   TOUJOURS relâché en sortie, quel que soit le chemin (succès, erreur CLI, timeout, cap
   dépassé).
 
+## Veille
+
+Un worker externe explore des comptes/recherches que TU configures (`Réglages → Veille`),
+dépose ce qu&apos;il trouve par MCP, et l&apos;humain décide. L&apos;outil n&apos;appelle
+jamais de modèle et ne va lui-même chercher aucun contenu sur le web.
+
+### Le modèle
+
+Deux files, un seul statut par item :
+
+- **`pool`** — corpus exploré (onglet Radar), pas encore travaillé. L&apos;humain peut y
+  créer une idée directement (bouton « Créer une idée »), sans passer par une adaptation.
+- **`proposed`** — file du matin : le worker a déjà rédigé une adaptation (`text_adapted`)
+  et un score, prêts à décider.
+
+Sur un item `proposed`, deux issues possibles :
+
+- **Valider** — crée une **idée** + un **contenu approuvé** sur le canal de validation
+  configuré, puis pose un job `publish` (le worker le complète comme n&apos;importe quel
+  job `publish`, cf. section jobs ci-dessus).
+- **Refuser** — motif libre, item marqué `refused`.
+
+Un item décidé (`validated`/`refused`, ou `expired` par expiration automatique) est
+**immuable** : le worker ne doit jamais le re-proposer.
+
+### Les 6 outils MCP
+
+| outil | rôle |
+|---|---|
+| `get_watch_config` | réglages veille + feeds actifs du workspace. `publish_config` y est rendu **en clair** (seul endroit — jamais dans l&apos;UI). |
+| `upsert_watch_items` | dépose un lot d&apos;items (`pool` ou `proposed`). Idempotent sur (workspace, external_id) ; un item déjà décidé est ignoré, jamais réécrit. |
+| `list_watch_items` | items du workspace, filtrables par statut / date, meilleur score d&apos;abord. |
+| `upsert_watch_feed` | crée ou met à jour un feed suivi (`account` ou `query`). Upsert sur (workspace, kind, label). |
+| `mark_feed_fetched` | marque un feed comme rafraîchi maintenant — à appeler après chaque passage du worker sur ce feed. |
+| `update_watch_settings` | met à jour les réglages veille (champs omis = inchangés). |
+
+### `publish_config` — write-only côté navigateur
+
+Configuration libre que le worker lit en clair via `get_watch_config` pour publier sur sa
+cible (mêmes bornes qu&apos;un secret : 20 clés max, 500 caractères par valeur). L&apos;UI
+(`Réglages → Veille`) ne la reçoit jamais en clair : `GET /api/watch/settings` et la réponse
+du `PATCH` ne rendent que les clés existantes avec valeur masquée (`••••1234`). Remplacer une
+clé = la renvoyer en clair dans le `PATCH` — et comme `publish_config` est remplacé **en
+bloc** à chaque écriture, toute clé déjà en place mais pas ressaisie dans le même appel
+disparaît.
+
 ## Tests
 
     npm run test    # vitest single-run, db content_studio_test

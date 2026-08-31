@@ -19,6 +19,7 @@ const SETTINGS = [
   { href: "/settings/gauges", label: "Jauges" },
   { href: "/settings/tokens", label: "Tokens MCP" },
   { href: "/settings/workspace", label: "Lanes" },
+  { href: "/settings/watch", label: "Veille" },
 ];
 
 export function Sidebar({ email }: { email: string }) {
