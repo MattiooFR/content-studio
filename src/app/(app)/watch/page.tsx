@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SectionCard } from "@/components/cockpit/section-card";
 import { WatchCard, type WatchItemDTO } from "@/components/watch/watch-card";
 import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
@@ -10,21 +10,38 @@ export default function WatchPage() {
   const [loading, setLoading] = useState(true);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Garde d'ordre (revue Task 7, fix round 1) : valider/refuser déclenche
+  // jusqu'à trois load() rapprochés (watch.updated, job.updated émis par le
+  // serveur, et le `await load()` de runAction), résolus dans un ordre non
+  // garanti — sans garde, une réponse lente peut écraser une réponse plus
+  // récente et faire réapparaître transitoirement un item déjà décidé.
+  // Chaque exécution capture son numéro de séquence ; elle n'applique un
+  // setState que si son numéro est encore le plus récent au moment où elle
+  // résout.
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
-    const [proposedRes, validatedRes] = await Promise.all([
-      fetch("/api/watch/items?status=proposed"),
-      fetch("/api/watch/items?status=validated&limit=10"),
-    ]);
-    if (proposedRes.ok) {
-      const data = (await proposedRes.json()) as { items: WatchItemDTO[] };
-      setProposed(data.items);
+    const seq = ++loadSeq.current;
+    try {
+      const [proposedRes, validatedRes] = await Promise.all([
+        fetch("/api/watch/items?status=proposed"),
+        fetch("/api/watch/items?status=validated&limit=10"),
+      ]);
+      if (proposedRes.ok) {
+        const data = (await proposedRes.json()) as { items: WatchItemDTO[] };
+        if (seq === loadSeq.current) setProposed(data.items);
+      }
+      if (validatedRes.ok) {
+        const data = (await validatedRes.json()) as { items: WatchItemDTO[] };
+        if (seq === loadSeq.current) setValidated(data.items);
+      }
+    } finally {
+      // Toujours dans un finally : un fetch qui rejette (réseau coupé) ne
+      // doit pas laisser l'écran bloqué sur "Chargement…". Gardé par seq
+      // comme le reste : si une exécution plus récente a déjà pris la main,
+      // c'est à elle de lever `loading` en dernier.
+      if (seq === loadSeq.current) setLoading(false);
     }
-    if (validatedRes.ok) {
-      const data = (await validatedRes.json()) as { items: WatchItemDTO[] };
-      setValidated(data.items);
-    }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
