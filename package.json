@@ -33,12 +33,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@tailwindcss/postcss": "^4",
     "@types/diff": "^8.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.10",
+    "linkedom": "^0.18.13",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.10"
