@@ -174,55 +174,80 @@ export async function refuseWatchItem(
 export async function validateWatchItem(
   workspaceId: string, id: string, opts: { editedText?: string } = {}
 ): Promise<{ item: WatchItem; ideaId: string; contentId: string; jobId: string }> {
-  const [item] = await db.select().from(watchItems)
-    .where(and(eq(watchItems.id, id), eq(watchItems.workspaceId, workspaceId)));
-  if (!item) throw new Error("item introuvable dans ce workspace");
-  if (item.status !== "proposed") throw new Error(`validation refusée : item en statut ${item.status}`);
-  const body = (opts.editedText ?? item.textAdapted ?? "").trim();
-  if (!body) throw new Error("aucune adaptation à valider");
-  if (body.length > MAX_WATCH_TEXT_LENGTH) throw new Error(`texte trop long (max ${MAX_WATCH_TEXT_LENGTH})`);
-  const { settings } = await getWatchConfig(workspaceId);
-  if (!settings.channelKey) throw new Error("channel_key manquant dans les réglages veille");
+  return db.transaction(async (tx) => {
+    // Verrou consultatif par (workspace, item) tenu jusqu'au commit de CETTE
+    // transaction : deux validations concurrentes du même item ne peuvent
+    // plus toutes deux lire « proposed » et créer chacune leur idée/contenu/
+    // job (double publication — finding de revue). Le verrou ne porte QUE sur
+    // `pg_advisory_xact_lock` : la relecture ci-dessous se fait SANS
+    // `for("update")` — verrouiller la ligne watch_items elle-même
+    // dead-lockerait avec les écritures des libs composées plus bas
+    // (createIdea, createContentDraft…), qui passent par le pool `db` global
+    // (d'autres connexions) et touchent d'autres tables, jamais watch_items
+    // pendant qu'on la tiendrait verrouillée ici.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${workspaceId}:watch-validate:${id}`}))`);
 
-  // Séquence sur les libs existantes (chacune émet ses events — la sidebar
-  // suit sans plomberie). En cas d'échec après createIdea : suppression
-  // best-effort de l'idée (cascade sur source + contenu), l'item reste
-  // proposed — pas d'idée fantôme, pas d'item validé sans contenu.
-  const titre = body.split("\n").map((l) => l.trim()).find((l) => l.length > 0)!.slice(0, 120);
-  const idea = await createIdea(workspaceId, {
-    title: titre, sourceUrl: item.url ?? undefined, createdBy: "watch",
-  });
-  let contentId: string, jobId: string;
-  try {
-    if (item.url) {
-      await addSource(workspaceId, { ideaId: idea.id, kind: "url", ref: item.url, createdBy: "watch" });
-    }
-    ({ contentId } = await createContentDraft({
-      workspaceId, ideaId: idea.id, channelKey: settings.channelKey,
-    }));
-    await applyContentUpdate({
-      workspaceId, contentId, body, authorType: "user", authorLabel: "watch",
+    const [item] = await tx.select().from(watchItems)
+      .where(and(eq(watchItems.id, id), eq(watchItems.workspaceId, workspaceId)));
+    if (!item) throw new Error("item introuvable dans ce workspace");
+    if (item.status !== "proposed") throw new Error(`validation refusée : item en statut ${item.status}`);
+    const body = (opts.editedText ?? item.textAdapted ?? "").trim();
+    if (!body) throw new Error("aucune adaptation à valider");
+    if (body.length > MAX_WATCH_TEXT_LENGTH) throw new Error(`texte trop long (max ${MAX_WATCH_TEXT_LENGTH})`);
+    const { settings } = await getWatchConfig(workspaceId);
+    if (!settings.channelKey) throw new Error("channel_key manquant dans les réglages veille");
+
+    // Séquence sur les libs existantes (chacune émet ses events — la sidebar
+    // suit sans plomberie), volontairement sur `db` (pas `tx`) : elles portent
+    // sur d'autres tables et gèrent leurs propres écritures/événements. En
+    // cas d'échec après createIdea, OU si l'update final gardé plus bas rend
+    // 0 ligne (l'item a changé sous nos pieds — ex. refusé entre-temps, qui
+    // ne prend pas ce verrou) : suppression best-effort de l'idée (cascade
+    // sur source + contenu), l'item reste proposed — pas d'idée fantôme, pas
+    // d'item validé sans contenu.
+    const titre = body.split("\n").map((l) => l.trim()).find((l) => l.length > 0)!.slice(0, 120);
+    const idea = await createIdea(workspaceId, {
+      title: titre, sourceUrl: item.url ?? undefined, createdBy: "watch",
     });
-    await setContentStatus(workspaceId, contentId, "approved");
-    const { job } = await createJob(workspaceId, {
-      kind: "publish", targetType: "content", targetId: contentId,
-      payload: { watch_item_id: id }, requestedBy: "watch",
-    });
-    jobId = job.id;
-  } catch (e) {
+    const cleanupIdea = async () => {
+      try {
+        await db.delete(ideas)
+          .where(and(eq(ideas.id, idea.id), eq(ideas.workspaceId, workspaceId)));
+      } catch { /* best-effort : l'échec d'origine prime */ }
+    };
+
+    let contentId: string, jobId: string;
     try {
-      await db.delete(ideas)
-        .where(and(eq(ideas.id, idea.id), eq(ideas.workspaceId, workspaceId)));
-    } catch { /* best-effort : l'échec d'origine prime */ }
-    throw e;
-  }
-  const [updated] = await db.update(watchItems).set({
-    status: "validated", textAdapted: body, ideaId: idea.id, contentId, decidedAt: new Date(),
-  }).where(and(eq(watchItems.id, id), eq(watchItems.workspaceId, workspaceId), eq(watchItems.status, "proposed")))
-    .returning();
-  if (!updated) throw new Error("l'item a changé pendant la validation");
-  bus.publish(workspaceId, { type: "watch.updated", itemId: id, status: "validated" });
-  return { item: updated as WatchItem, ideaId: idea.id, contentId, jobId };
+      if (item.url) {
+        await addSource(workspaceId, { ideaId: idea.id, kind: "url", ref: item.url, createdBy: "watch" });
+      }
+      ({ contentId } = await createContentDraft({
+        workspaceId, ideaId: idea.id, channelKey: settings.channelKey,
+      }));
+      await applyContentUpdate({
+        workspaceId, contentId, body, authorType: "user", authorLabel: "watch",
+      });
+      await setContentStatus(workspaceId, contentId, "approved");
+      const { job } = await createJob(workspaceId, {
+        kind: "publish", targetType: "content", targetId: contentId,
+        payload: { watch_item_id: id }, requestedBy: "watch",
+      });
+      jobId = job.id;
+    } catch (e) {
+      await cleanupIdea();
+      throw e;
+    }
+    const [updated] = await db.update(watchItems).set({
+      status: "validated", textAdapted: body, ideaId: idea.id, contentId, decidedAt: new Date(),
+    }).where(and(eq(watchItems.id, id), eq(watchItems.workspaceId, workspaceId), eq(watchItems.status, "proposed")))
+      .returning();
+    if (!updated) {
+      await cleanupIdea();
+      throw new Error("l'item a changé pendant la validation");
+    }
+    bus.publish(workspaceId, { type: "watch.updated", itemId: id, status: "validated" });
+    return { item: updated as WatchItem, ideaId: idea.id, contentId, jobId };
+  });
 }
 
 export async function expireStaleProposed(workspaceId: string): Promise<number> {
@@ -252,6 +277,10 @@ export async function createIdeaFromPoolItem(
     .where(and(eq(watchItems.id, id), eq(watchItems.workspaceId, workspaceId)));
   if (!item) throw new Error("item introuvable dans ce workspace");
   if (item.status !== "pool") throw new Error(`création d'idée refusée : item en statut ${item.status}`);
+  // Idempotence : un item pool qui a déjà son idée ne doit pas en créer une
+  // seconde (double clic sur « Créer une idée » côté radar) — l'UI affichera
+  // « Idée créée » plutôt que de rejouer l'action.
+  if (item.ideaId) throw new Error("idée déjà créée pour cet item");
 
   const titre = item.textSource.split("\n").map((l) => l.trim()).find((l) => l.length > 0)?.slice(0, 120)
     ?? item.textSource.slice(0, 120);
@@ -262,9 +291,12 @@ export async function createIdeaFromPoolItem(
     await addSource(workspaceId, { ideaId: idea.id, kind: "url", ref: item.url, createdBy: "watch" });
   }
   const [updated] = await db.update(watchItems).set({ ideaId: idea.id })
-    .where(and(eq(watchItems.id, id), eq(watchItems.workspaceId, workspaceId)))
+    .where(and(
+      eq(watchItems.id, id), eq(watchItems.workspaceId, workspaceId), eq(watchItems.status, "pool"),
+    ))
     .returning({ id: watchItems.id });
   if (!updated) throw new Error("item introuvable dans ce workspace");
+  bus.publish(workspaceId, { type: "watch.updated", itemId: id });
   return { ideaId: idea.id };
 }
 

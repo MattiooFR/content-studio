@@ -293,6 +293,19 @@ describe("createIdeaFromPoolItem", () => {
     expect(after.status).toBe("pool");
     expect(after.ideaId).toBe(ideaId);
   });
+
+  it("deuxième appel sur le même item → throw, une seule idée en base (idempotence)", async () => {
+    const u = await signUpTestUser();
+    await upsertWatchItems(u.workspaceId, [item({ status: "pool", textAdapted: undefined })]);
+    const [row] = await listWatchItems(u.workspaceId, { status: "pool" });
+
+    await createIdeaFromPoolItem(u.workspaceId, row.id);
+    await expect(createIdeaFromPoolItem(u.workspaceId, row.id))
+      .rejects.toThrow(/idée déjà créée/);
+
+    const ideasList = await listIdeas(u.workspaceId);
+    expect(ideasList).toHaveLength(1);
+  });
 });
 
 describe("getWatchConfig / updateWatchSettings", () => {
