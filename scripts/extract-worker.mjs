@@ -50,10 +50,14 @@ async function connect() {
 
 // Appel d'outil + décodage du JSON métier. Une erreur métier ({ error }) est
 // convertie en exception : chaque appelant décide (claim perdu = on passe).
+// Piège : claim_job/complete_job/fail_job rendent la LIGNE du job, qui porte
+// sa propre colonne `error` (null, ou le message d'un échec passé) — seule
+// une réponse SANS `id` est une erreur métier, jamais une ligne rendue.
 async function call(name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
   const data = JSON.parse(res.content?.[0]?.text ?? "{}");
-  if (data && typeof data === "object" && !Array.isArray(data) && "error" in data) {
+  if (data && typeof data === "object" && !Array.isArray(data)
+    && "error" in data && !("id" in data)) {
     throw new Error(`${name}: ${data.error}`);
   }
   return data;
