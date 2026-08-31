@@ -2,7 +2,8 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sources, ideas } from "@/lib/db/schema";
 import { youtubeVideoId } from "@/lib/youtube";
-import { createJob } from "@/lib/jobs";
+import { createJob, listJobs, retryJob } from "@/lib/jobs";
+import { bus } from "@/lib/events";
 
 type SourceKind = "url" | "pdf" | "audio" | "video" | "text";
 type SourceStatus = "pending" | "extracted" | "failed";
@@ -146,18 +147,32 @@ export async function attachExtraction(
   workspaceId: string, sourceId: string,
   input: { extractedText: string; extractedMeta?: Record<string, unknown> }
 ) {
+  if (input.extractedText.length > MAX_SOURCE_EXTRACTED_LENGTH) {
+    throw new Error(`extractedText trop long (max ${MAX_SOURCE_EXTRACTED_LENGTH} caractères)`);
+  }
+  const existing = await getSource(workspaceId, sourceId);
+  if (!existing) return null;
+
   const update: Record<string, unknown> = {
     status: "extracted",
     extractedText: input.extractedText,
     updatedAt: new Date(),
   };
   if (input.extractedMeta !== undefined) update.extractedMeta = input.extractedMeta;
+  // Une URL déposée sans titre en gagne un si l'extracteur en fournit —
+  // jamais d'écrasement d'un titre posé par l'humain.
+  const metaTitle = input.extractedMeta?.title;
+  if (!existing.title && typeof metaTitle === "string" && metaTitle.trim()) {
+    update.title = metaTitle.trim().slice(0, MAX_SOURCE_TITLE_LENGTH);
+  }
 
   const [row] = await db.update(sources)
     .set(update as any)
     .where(and(eq(sources.id, sourceId), eq(sources.workspaceId, workspaceId)))
     .returning();
-  return row ?? null;
+  if (!row) return null;
+  bus.publish(workspaceId, { type: "source.updated", sourceId: row.id, ideaId: row.ideaId, status: row.status });
+  return row;
 }
 
 export async function markSourceFailed(workspaceId: string, sourceId: string, reason: string) {
@@ -165,5 +180,38 @@ export async function markSourceFailed(workspaceId: string, sourceId: string, re
     .set({ status: "failed", extractedMeta: { error: reason }, updatedAt: new Date() })
     .where(and(eq(sources.id, sourceId), eq(sources.workspaceId, workspaceId)))
     .returning();
+  if (row) bus.publish(workspaceId, { type: "source.updated", sourceId: row.id, ideaId: row.ideaId, status: row.status });
   return row ?? null;
+}
+
+/** Source failed → pending, et repose le job extract (retry du dernier failed, sinon un neuf). */
+export async function retrySourceExtraction(workspaceId: string, sourceId: string) {
+  const source = await getSource(workspaceId, sourceId);
+  if (!source) return null;
+  if (source.status !== "failed") {
+    throw new Error(`réessai refusé : source en statut ${source.status}`);
+  }
+  const [row] = await db.update(sources)
+    .set({ status: "pending", extractedMeta: {}, updatedAt: new Date() })
+    .where(and(eq(sources.id, sourceId), eq(sources.workspaceId, workspaceId)))
+    .returning();
+  if (!row) return null;
+
+  const failedJobs = await listJobs(workspaceId, {
+    kind: "extract", targetType: "source", targetId: sourceId, status: "failed",
+  });
+  if (failedJobs[0]) {
+    // retryJob garde l'historique (attempts, previous_errors). S'il refuse
+    // (le job a bougé entre-temps : double clic, worker), on repose un neuf —
+    // createJob coalesce sur un éventuel job actif.
+    try {
+      await retryJob(workspaceId, failedJobs[0].id);
+    } catch {
+      await enqueueExtractJob(workspaceId, row);
+    }
+  } else {
+    await enqueueExtractJob(workspaceId, row);
+  }
+  bus.publish(workspaceId, { type: "source.updated", sourceId: row.id, ideaId: row.ideaId, status: row.status });
+  return row;
 }

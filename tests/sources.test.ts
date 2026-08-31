@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { createIdea } from "@/lib/ideas";
 import {
-  addSource, listSources, getSource, attachExtraction, markSourceFailed,
-  MAX_SOURCE_EXCERPT_LENGTH, MAX_SOURCE_REF_LENGTH, MAX_SOURCE_TITLE_LENGTH, MAX_SOURCE_TEXT_LENGTH,
+  addSource, listSources, getSource, attachExtraction, markSourceFailed, retrySourceExtraction,
+  MAX_SOURCE_EXCERPT_LENGTH, MAX_SOURCE_REF_LENGTH, MAX_SOURCE_TITLE_LENGTH, MAX_SOURCE_TEXT_LENGTH, MAX_SOURCE_EXTRACTED_LENGTH,
 } from "@/lib/sources";
-import { listJobs } from "@/lib/jobs";
+import { listJobs, claimJob, failJob } from "@/lib/jobs";
+import { bus, type WorkspaceEvent } from "@/lib/events";
 import { signUpTestUser } from "./helpers";
 
 describe("sources — cycle pending → extracted", () => {
@@ -217,5 +218,73 @@ describe("sources — kinds v1.1 (video YouTube, text long, job extract)", () =>
     await expect(
       addSource(ws.workspaceId, { ideaId: idea.id, kind: "text", text: "x".repeat(MAX_SOURCE_TEXT_LENGTH + 1) })
     ).rejects.toThrow(/text trop long/);
+  });
+});
+
+describe("sources — extraction : borne, titre, réessai, événements", () => {
+  it("attachExtraction au-delà de MAX_SOURCE_EXTRACTED_LENGTH → throw", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+    const source = await addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "https://exemple.fr/b" });
+    await expect(
+      attachExtraction(ws.workspaceId, source.id, { extractedText: "x".repeat(MAX_SOURCE_EXTRACTED_LENGTH + 1) })
+    ).rejects.toThrow(/extractedText trop long/);
+  });
+
+  it("attachExtraction pose le titre depuis extracted_meta.title, sans jamais écraser un titre existant", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+
+    const sansTitre = await addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "https://exemple.fr/t1" });
+    const r1 = await attachExtraction(ws.workspaceId, sansTitre.id, {
+      extractedText: "corps", extractedMeta: { title: "Titre de la page" },
+    });
+    expect(r1?.title).toBe("Titre de la page");
+
+    const avecTitre = await addSource(ws.workspaceId, {
+      ideaId: idea.id, kind: "url", ref: "https://exemple.fr/t2", title: "Mon titre",
+    });
+    const r2 = await attachExtraction(ws.workspaceId, avecTitre.id, {
+      extractedText: "corps", extractedMeta: { title: "Autre" },
+    });
+    expect(r2?.title).toBe("Mon titre");
+  });
+
+  it("retrySourceExtraction : failed → pending + job requeued (attempts+1) ; refus si non failed", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+    const source = await addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "https://exemple.fr/r" });
+    const [job] = await listJobs(ws.workspaceId, { kind: "extract", targetType: "source", targetId: source.id });
+    await claimJob(ws.workspaceId, job.id, "w");
+    await failJob(ws.workspaceId, job.id, "boom"); // effet Task 2 : source → failed
+
+    const retried = await retrySourceExtraction(ws.workspaceId, source.id);
+    expect(retried?.status).toBe("pending");
+    const jobs = await listJobs(ws.workspaceId, { kind: "extract", targetType: "source", targetId: source.id });
+    expect(jobs[0].status).toBe("queued");
+    expect(jobs[0].attempts).toBe(1);
+
+    await expect(retrySourceExtraction(ws.workspaceId, source.id)).rejects.toThrow(/réessai refusé/);
+    expect(await retrySourceExtraction(ws.workspaceId, "00000000-0000-0000-0000-000000000000")).toBeNull();
+  });
+
+  it("source.updated publié sur attachExtraction et markSourceFailed", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+    const source = await addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "https://exemple.fr/e" });
+    const events: WorkspaceEvent[] = [];
+    const off = bus.subscribe(ws.workspaceId, (e) => events.push(e));
+    try {
+      await attachExtraction(ws.workspaceId, source.id, { extractedText: "corps" });
+      await markSourceFailed(ws.workspaceId, source.id, "re-cassée");
+    } finally {
+      off();
+    }
+    // Prédicat de type : un simple filter ne rétrécit pas l'union WorkspaceEvent
+    const sourceEvents = events.filter(
+      (e): e is Extract<WorkspaceEvent, { type: "source.updated" }> => e.type === "source.updated"
+    );
+    expect(sourceEvents.map((e) => e.status)).toEqual(["extracted", "failed"]);
+    expect(sourceEvents[0]).toMatchObject({ sourceId: source.id, ideaId: idea.id });
   });
 });
