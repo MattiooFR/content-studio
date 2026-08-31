@@ -5,6 +5,7 @@ import { signUpTestUser } from "./helpers";
 import { generateMcpToken } from "@/lib/tenant";
 import { getIdea } from "@/lib/ideas";
 import { getSource } from "@/lib/sources";
+import { listJobs } from "@/lib/jobs";
 import {
   MAX_SOURCE_EXCERPT_LENGTH, MAX_SOURCE_REF_LENGTH, MAX_SOURCE_TITLE_LENGTH,
 } from "@/lib/sources";
@@ -375,6 +376,34 @@ describe("POST /api/clip", () => {
       expect(res.headers.get("access-control-allow-origin")).toBe(
         "chrome-extension://abcdefabcdefabcdefabcdefabcdefab"
       );
+    });
+  });
+
+  describe("clip — classification et job extract (vague sources & extraction)", () => {
+    it("clip d'une URL YouTube → source video + job extract queued", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "clip");
+      const res = await POST(clipRequest({ url: "https://youtu.be/dQw4w9WgXcQ", title: "Une vidéo" }, token));
+      expect(res.status).toBe(200);
+      const { sourceId } = await res.json();
+      const source = await getSource(ws.workspaceId, sourceId);
+      expect(source?.kind).toBe("video");
+      const jobs = await listJobs(ws.workspaceId, { kind: "extract", targetType: "source", targetId: sourceId });
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].status).toBe("queued");
+      expect(jobs[0].payload).toMatchObject({ source_kind: "video", ref: "https://youtu.be/dQw4w9WgXcQ" });
+    });
+
+    it("clip d'un article → source url + job extract queued", async () => {
+      const ws = await signUpTestUser();
+      const { token } = await generateMcpToken(ws.workspaceId, "clip");
+      const res = await POST(clipRequest({ url: "https://www.dwarkesh.com/p/openai-huggingface" }, token));
+      expect(res.status).toBe(200);
+      const { sourceId } = await res.json();
+      expect((await getSource(ws.workspaceId, sourceId))?.kind).toBe("url");
+      expect(
+        await listJobs(ws.workspaceId, { kind: "extract", targetType: "source", targetId: sourceId })
+      ).toHaveLength(1);
     });
   });
 });

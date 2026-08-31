@@ -127,9 +127,25 @@ retry silencieux côté serveur.
 | `sync` | jamais par un bouton direct — créé par le hook de re-sync, ou par « Re-synchroniser » sur la carte publication | worker pose `mark_synced` |
 | `revise` | rien | worker `list_comments(open)` → réécrit → `update_content` → `resolve_comment(applied)` |
 | `transcribe` | jamais par un bouton — créé par la route de dictée | seule complétion qui écrit ailleurs que dans le job : `result.text` devient le corps du commentaire |
+| `extract` | dépôt d'une source url/vidéo (automatique), ou « Réessayer » sur une source échouée | worker `attach_extraction(source_id, texte, meta)` puis `complete_job` — le complete est refusé tant que la source n'est pas extraite |
 
 Tout autre `kind` est libre : l'outil l'accepte, le range dans la file, et laisse le
 worker et l'UI convenir de son sens (pastille générique, pas d'effet automatique).
+
+### Extraction des sources : le worker fourni
+
+Les jobs `extract` (articles → Readability, vidéos YouTube → yt-dlp +
+mlx-whisper en local) ont un worker déterministe prêt à l'emploi — aucun
+token LLM :
+
+```sh
+CS_MCP_URL=http://localhost:3003/api/mcp CS_MCP_TOKEN=cs_… \
+  node scripts/extract-worker.mjs        # boucle (poll 15 s) ; --once pour un seul passage
+```
+
+Prérequis sur la machine du worker : `yt-dlp` et `mlx_whisper` dans le PATH
+(Apple Silicon pour mlx). Un agent MCP peut aussi consommer ces jobs à la
+main en suivant le tableau ci-dessus.
 
 ### Publications
 

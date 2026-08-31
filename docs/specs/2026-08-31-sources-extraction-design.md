@@ -1,7 +1,7 @@
 # Vague « sources & extraction » — spécification de conception
 
 **Date** : 2026-08-31
-**Statut** : validé (design), plan à venir
+**Statut** : implémenté (plan docs/plans/2026-08-31-sources-extraction.md)
 **Périmètre** : rendre les sources d'une idée réellement exploitables, façon NotebookLM —
 déposer des articles (URL), des vidéos YouTube (transcript audio via mlx-whisper) et des
 textes collés longs, faire extraire le contenu par un worker externe, et le montrer dans
@@ -108,6 +108,9 @@ style que les effets post-commit de jobs.ts : si elle échoue, la source existe 
   repasse la source en `pending` (reset `extracted_meta.error`) puis `retryJob` sur le
   dernier job extract failed de cette source s'il existe, sinon `createJob` neuf. Réponse
   = la source à jour.
+- **Déviation assumée (revue finale, TOCTOU)** : `retrySourceExtraction` conditionne
+  l'update à `WHERE status = 'failed'` et lève une erreur si la ligne n'a pas bougé, pour
+  fermer la fenêtre où la source changerait de statut entre le check et l'update.
 
 ### 2.4 Événements
 
@@ -135,11 +138,18 @@ base : il parle exclusivement MCP, comme n'importe quel worker.
   `linkedom` (parse) + `@mozilla/readability` → `textContent` + `{title, byline,
   siteName, lang}`. Content-type non HTML (PDF compris) → `fail_job("contenu non HTML
   (<type>) — dépose le texte à la main")` en v1.1.
+- **Déviation assumée (revue finale, durcissement sécurité)** : `extractUrl` ajoute
+  `assertPublicHttpUrl` (refuse localhost/`.local`/IP privées/link-local) et suit les
+  redirections À LA MAIN (max 5 hops, chaque hop re-validé) — non prévu tel quel dans le
+  design initial, ajouté pour fermer un SSRF côté worker.
 - **kind `video`** : `yt-dlp -x --audio-format m4a -o <tmp>` (répertoire temporaire
   dédié, nettoyé en `finally`) → `mlx_whisper --model mlx-community/whisper-large-v3-turbo`
   → texte brut ; meta `{title (yt-dlp), duration_s, model: "whisper-large-v3-turbo",
   tool: "extract-worker"}`. Binaire manquant (yt-dlp ou mlx_whisper introuvable) →
   `fail_job` explicite, jamais un crash de la boucle.
+- **Déviation assumée (revue finale, durcissement sécurité)** : l'appel `yt-dlp` insère
+  une sentinelle `--` avant la ref pour qu'une URL commençant par `-` ne soit jamais
+  interprétée comme une option de la commande.
 - **Deps npm ajoutées** (dépendances de dev du repo, vérifiées légitimes) :
   `@mozilla/readability` (Mozilla), `linkedom` (WebReflection). Rien d'autre.
 
@@ -161,6 +171,14 @@ fasse à la main en dépannage.
 - **Panneau texte extrait** : clic sur une source `extracted` → panneau/accordéon dans la
   fiche : titre, méta (site/durée/langue), nombre de mots, texte scrollable. Lecture
   seule.
+- **Déviation constatée (revue finale)** : le panneau affiche le nombre de mots et le
+  texte scrollable ; le titre reste dans l'en-tête de la ligne (pas dupliqué dans le
+  panneau) et les méta site/durée/langue de `extracted_meta` n'y sont pas encore
+  affichées — accepté pour la clôture v1.1, à reprendre si l'usage le demande.
+- **Déviation assumée (revue finale)** : l'indice worker s'affiche dès qu'une source est
+  `pending`, sans distinguer job en attente / extraction en cours — copie neutre
+  (« en attente ou en cours ») couvrant les deux états, plutôt qu'un câblage useJobs par
+  source.
 - **Live** : abonnement `source.updated` → refetch de la liste.
 
 ---

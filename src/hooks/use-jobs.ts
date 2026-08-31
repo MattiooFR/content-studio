@@ -12,7 +12,7 @@ export type JobRow = {
  * Les jobs d'une cible, tenus à jour par SSE (job.updated) — jamais de polling.
  * `latest(kind)` = le plus récent de ce kind (la liste arrive plus récents d'abord).
  */
-export function useJobs(targetType: "idea" | "content" | "comment", targetId: string) {
+export function useJobs(targetType: "idea" | "content" | "comment" | "source", targetId: string) {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 

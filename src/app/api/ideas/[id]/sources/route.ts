@@ -24,11 +24,13 @@ export async function POST(
   try {
     const { workspaceId, userId } = await requireWorkspace(req.headers);
     const ideaId = (await params).id;
-    const { kind, ref, title, rawExcerpt } = await req.json();
-    if (!kind || !ref)
-      return NextResponse.json({ error: "kind et ref requis" }, { status: 400 });
+    const { kind, ref, text, title, rawExcerpt } = await req.json();
+    if (!ref && !text)
+      return NextResponse.json({ error: "ref ou text requis" }, { status: 400 });
     const source = await addSource(workspaceId, {
-      ideaId, kind, ref, title, rawExcerpt, createdBy: userId,
+      ideaId,
+      kind: kind ?? (text && !ref ? "text" : "url"),
+      ref, text, title, rawExcerpt, createdBy: userId,
     });
     return NextResponse.json(source);
   } catch (e) {
@@ -38,6 +40,10 @@ export async function POST(
     if (e instanceof Error && e.message.includes("non disponible"))
       return NextResponse.json({ error: e.message }, { status: 400 });
     if (e instanceof Error && e.message.includes("URL invalide"))
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    if (e instanceof Error && e.message.includes("requis"))
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    if (e instanceof Error && e.message.includes("YouTube attendue"))
       return NextResponse.json({ error: e.message }, { status: 400 });
     // Bornes anti-DoS d'addSource (durcissement, cf. src/lib/sources.ts) :
     // "ref/title/rawExcerpt trop long(ue)" → 400, jamais un 500 générique.

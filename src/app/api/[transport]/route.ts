@@ -205,10 +205,14 @@ const handler = createMcpHandler(
     server.registerTool(
       "list_sources",
       {
-        description: "Liste les sources du workspace (drop-anything : url/pdf/audio/video/text). Filtre optionnel par statut — 'pending' pour trouver ce qu'il reste à extraire.",
-        inputSchema: { status: z.enum(["pending", "extracted", "failed"]).optional() },
+        description: "Liste les sources du workspace (url/video/text). Filtres optionnels : status ('pending' = extraction en attente), idea_id (les sources d'une idée).",
+        inputSchema: {
+          status: z.enum(["pending", "extracted", "failed"]).optional(),
+          idea_id: z.string().uuid().optional(),
+        },
       },
-      async ({ status }, extra) => json(await listSources(wsOf(extra), { status }))
+      async ({ status, idea_id }, extra) =>
+        json(await listSources(wsOf(extra), { status, ideaId: idea_id }))
     );
 
     server.registerTool(
@@ -226,25 +230,26 @@ const handler = createMcpHandler(
     server.registerTool(
       "add_source",
       {
-        description: "Dépose une source sur une idée (status: pending). L'outil STOCKE seulement — pdf/audio/video refusés en v1, l'extraction vient toujours de l'agent via attach_extraction.",
+        description: "Dépose une source sur une idée. kind url/video : ref = URL (une URL YouTube passée en url est reclassée video) → status pending + job extract pour le worker. kind text : passe le contenu (long) dans `text` → extraite d'emblée. pdf/audio (upload binaire) refusés en v1.1.",
         inputSchema: {
           idea_id: z.string().uuid(),
           kind: z.enum(["url", "pdf", "audio", "video", "text"]),
-          ref: z.string(),
+          ref: z.string().optional(),
+          text: z.string().optional(),
           title: z.string().optional(),
           raw_excerpt: z.string().optional(),
         },
       },
-      async ({ idea_id, kind, ref, title, raw_excerpt }, extra) =>
+      async ({ idea_id, kind, ref, text, title, raw_excerpt }, extra) =>
         json(await addSource(wsOf(extra), {
-          ideaId: idea_id, kind, ref, title, rawExcerpt: raw_excerpt,
+          ideaId: idea_id, kind, ref, text, title, rawExcerpt: raw_excerpt,
         }))
     );
 
     server.registerTool(
       "attach_extraction",
       {
-        description: "Rattache le texte extrait par l'agent (transcript, contenu de page, texte de PDF) à une source. Passe son statut à 'extracted'.",
+        description: "Rattache le texte extrait par l'agent (transcript, contenu de page, texte de PDF) à une source. Passe son statut à 'extracted'. Borné à 1 500 000 caractères. Le worker enchaîne avec complete_job — un job extract ne passe done que si la source est extraite.",
         inputSchema: {
           source_id: z.string().uuid(),
           extracted_text: z.string(),
