@@ -90,6 +90,27 @@ describe("MCP — veille", () => {
     expect(bad.error).toMatch(/channel inconnu/);
   });
 
+  it("get_watch_config rend les feeds actifs seulement (worker reçoit OUBLIER les désactivés)", async () => {
+    const u = await signUpTestUser();
+    const { token } = await generateMcpToken(u.workspaceId, "test");
+    const { upsertWatchFeed, setWatchFeedEnabled } = await import("@/lib/watch");
+
+    // Crée deux feeds : un actif, un désactivé
+    const active = await upsertWatchFeed(u.workspaceId, { kind: "account", label: "@actif", enabled: true });
+    const disabled = await upsertWatchFeed(u.workspaceId, { kind: "query", label: "disabled_query", enabled: false });
+
+    // MCP tool get_watch_config rend SEULEMENT les feeds actifs
+    const cfg = JSON.parse((await callMcpTool(token, "get_watch_config", {})).texte);
+    expect(cfg.feeds).toHaveLength(1);
+    expect(cfg.feeds[0].id).toBe(active.id);
+    expect(cfg.feeds[0].label).toBe("@actif");
+
+    // Désactive le premier, rapelle — zéro feeds
+    await setWatchFeedEnabled(u.workspaceId, active.id, false);
+    const cfg2 = JSON.parse((await callMcpTool(token, "get_watch_config", {})).texte);
+    expect(cfg2.feeds).toHaveLength(0);
+  });
+
   it("isolation : le token du workspace B ne voit ni items ni config de A", async () => {
     const a = await signUpTestUser();
     const { token: tokenA } = await generateMcpToken(a.workspaceId, "a");

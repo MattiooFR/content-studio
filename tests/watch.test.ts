@@ -451,6 +451,19 @@ describe("upsertWatchFeed / markFeedFetched / deleteWatchFeed", () => {
       setWatchFeedEnabled(u.workspaceId, "00000000-0000-0000-0000-000000000000", true)
     ).rejects.toThrow(/introuvable/);
   });
+
+  it("params énorme (> MAX_WATCH_JSON_BYTES) → throw, aucun feed créé", async () => {
+    const u = await signUpTestUser();
+    const hugeParams = {
+      massive: "x".repeat(20_000),
+    };
+    await expect(upsertWatchFeed(u.workspaceId, {
+      kind: "query", label: "huge-feed", params: hugeParams,
+    })).rejects.toThrow(/params trop gros/);
+
+    const { feeds } = await getWatchConfig(u.workspaceId);
+    expect(feeds).toEqual([]);
+  });
 });
 
 describe("listWatchItems", () => {

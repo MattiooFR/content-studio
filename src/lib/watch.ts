@@ -432,6 +432,9 @@ export async function upsertWatchFeed(
   }
   const label = input.label.trim();
   if (!label) throw new Error("label requis");
+  if (input.params !== undefined && Buffer.byteLength(JSON.stringify(input.params), "utf8") > MAX_WATCH_JSON_BYTES) {
+    throw new Error(`params trop gros (max ${MAX_WATCH_JSON_BYTES} octets)`);
+  }
 
   const values: Record<string, unknown> = { workspaceId, kind: input.kind, label };
   if (input.params !== undefined) values.params = input.params;

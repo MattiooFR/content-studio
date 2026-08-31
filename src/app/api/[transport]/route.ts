@@ -438,7 +438,15 @@ const handler = createMcpHandler(
         description: "Réglages veille (topics, style, require_media, channel_key) et feeds actifs du workspace. publish_config est rendu EN CLAIR ici (jamais dans l'UI, qui le rédige) : c'est la configuration de publication du worker sur le canal de veille — à traiter comme un secret côté worker, ne jamais la reloguer.",
         inputSchema: {},
       },
-      async (_args, extra) => json(await getWatchConfig(wsOf(extra)))
+      async (_args, extra) => {
+        try {
+          const config = await getWatchConfig(wsOf(extra));
+          return json({ ...config, feeds: config.feeds.filter((f) => f.enabled) });
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
     );
 
     server.registerTool(
