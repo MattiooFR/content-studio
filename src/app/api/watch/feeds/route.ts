@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     const feed = await upsertWatchFeed(workspaceId, {
       kind: body.kind,
       label: body.label,
-      params: body.params !== undefined ? body.params : undefined,
+      params: body.params,
       enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
     });
     return NextResponse.json({ feed });

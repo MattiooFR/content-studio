@@ -10,7 +10,7 @@ import { listJobs } from "@/lib/jobs";
 import {
   upsertWatchItems, listWatchItems, countWatchItems, refuseWatchItem,
   validateWatchItem, expireStaleProposed, purgeStalePool, createIdeaFromPoolItem,
-  getWatchConfig, upsertWatchFeed, deleteWatchFeed, markFeedFetched,
+  getWatchConfig, upsertWatchFeed, deleteWatchFeed, markFeedFetched, setWatchFeedEnabled,
   updateWatchSettings, redactPublishConfigForClient,
   MAX_WATCH_BATCH, MAX_WATCH_NOTE_LENGTH,
 } from "@/lib/watch";
@@ -401,6 +401,19 @@ describe("upsertWatchFeed / markFeedFetched / deleteWatchFeed", () => {
     expect(feeds).toEqual([]);
     await expect(markFeedFetched(b.workspaceId, feedA.id)).rejects.toThrow(/introuvable/);
     await expect(deleteWatchFeed(b.workspaceId, feedA.id)).rejects.toThrow(/introuvable/);
+  });
+
+  it("setWatchFeedEnabled bascule enabled ; feed introuvable → throw", async () => {
+    const u = await signUpTestUser();
+    const feed = await upsertWatchFeed(u.workspaceId, { kind: "account", label: "@toggle" });
+    expect(feed.enabled).toBe(true);
+
+    const updated = await setWatchFeedEnabled(u.workspaceId, feed.id, false);
+    expect(updated.enabled).toBe(false);
+
+    await expect(
+      setWatchFeedEnabled(u.workspaceId, "00000000-0000-0000-0000-000000000000", true)
+    ).rejects.toThrow(/introuvable/);
   });
 });
 

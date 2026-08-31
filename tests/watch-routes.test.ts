@@ -220,6 +220,15 @@ describe("routes /api/watch/feeds", () => {
     expect(again.status).toBe(404);
   });
 
+  it("PATCH avec un id malformé (pas un uuid) → 400 contrôlé, jamais un 500", async () => {
+    const ws = await signUpTestUser();
+    const r = await feedPATCH(
+      await authedReq(ws, "/api/watch/feeds/not-a-uuid", patchInit({ enabled: false })),
+      params("not-a-uuid")
+    );
+    expect(r.status).toBe(400);
+  });
+
   it("isolation : feed du workspace A invisible et non modifiable depuis B", async () => {
     const a = await signUpTestUser();
     const b = await signUpTestUser();

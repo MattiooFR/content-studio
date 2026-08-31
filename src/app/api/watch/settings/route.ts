@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const { workspaceId } = await requireWorkspace(req.headers);
-    const body = await req.json().catch(() => ({}));
+    const body = await req.json();
 
     // allow-list stricte : topics/style/requireMedia/channelKey/publishConfig
     // uniquement, jamais un spread du body — seules les clés PRÉSENTES du

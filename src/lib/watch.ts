@@ -429,6 +429,18 @@ export async function deleteWatchFeed(workspaceId: string, id: string): Promise<
   if (!row) throw new Error("feed introuvable dans ce workspace");
 }
 
+/** Toggle de PATCH /api/watch/feeds/[id] — même moule que markFeedFetched juste
+ * en dessous : update gardé workspaceId+id, throw « introuvable » si 0 ligne. */
+export async function setWatchFeedEnabled(
+  workspaceId: string, id: string, enabled: boolean
+): Promise<WatchFeed> {
+  const [row] = await db.update(watchFeeds).set({ enabled })
+    .where(and(eq(watchFeeds.id, id), eq(watchFeeds.workspaceId, workspaceId)))
+    .returning();
+  if (!row) throw new Error("feed introuvable dans ce workspace");
+  return row as WatchFeed;
+}
+
 export async function markFeedFetched(workspaceId: string, id: string): Promise<WatchFeed> {
   const [row] = await db.update(watchFeeds).set({ lastFetchedAt: new Date() })
     .where(and(eq(watchFeeds.id, id), eq(watchFeeds.workspaceId, workspaceId)))
