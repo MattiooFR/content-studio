@@ -432,12 +432,14 @@ Un item décidé (`validated`/`refused`, ou `expired` par expiration automatique
 ### `publish_config` — write-only côté navigateur
 
 Configuration libre que le worker lit en clair via `get_watch_config` pour publier sur sa
-cible (mêmes bornes qu&apos;un secret : 20 clés max, 500 caractères par valeur). L&apos;UI
-(`Réglages → Veille`) ne la reçoit jamais en clair : `GET /api/watch/settings` et la réponse
-du `PATCH` ne rendent que les clés existantes avec valeur masquée (`••••1234`). Remplacer une
-clé = la renvoyer en clair dans le `PATCH` — et comme `publish_config` est remplacé **en
-bloc** à chaque écriture, toute clé déjà en place mais pas ressaisie dans le même appel
-disparaît.
+cible (mêmes bornes qu&apos;un secret : 500 caractères par valeur, 20 clés max sur le
+résultat). L&apos;UI (`Réglages → Veille`) ne la reçoit jamais en clair : `GET
+/api/watch/settings` et la réponse du `PATCH` ne rendent que les clés existantes avec valeur
+masquée (`••••1234`). Remplacer une clé = la renvoyer en clair dans le `PATCH` — et comme
+l&apos;UI ne peut pas renvoyer en clair les clés qu&apos;elle n&apos;édite pas, `PATCH
+/api/watch/settings` et `update_watch_settings` **mergent `publish_config` clé par clé** avec
+l&apos;existant plutôt que de le remplacer en bloc : une clé fournie écrase ou ajoute, une clé
+absente du patch survit, une clé fournie à `null` est supprimée.
 
 ## Tests
 
