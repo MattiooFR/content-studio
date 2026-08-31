@@ -1,10 +1,10 @@
 import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { agentJobs, contentComments, contents, ideas } from "@/lib/db/schema";
+import { agentJobs, contentComments, contents, ideas, sources } from "@/lib/db/schema";
 import { bus } from "@/lib/events";
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
-export type JobTargetType = "idea" | "content" | "comment";
+export type JobTargetType = "idea" | "content" | "comment" | "source";
 export type Job = typeof agentJobs.$inferSelect;
 
 export const SILENT_AFTER_MS = 10 * 60_000;
@@ -46,6 +46,10 @@ async function assertTarget(workspaceId: string, targetType: JobTargetType, targ
   } else if (targetType === "comment") {
     const [row] = await db.select({ id: contentComments.id }).from(contentComments)
       .where(and(eq(contentComments.id, targetId), eq(contentComments.workspaceId, workspaceId)));
+    if (row) return;
+  } else if (targetType === "source") {
+    const [row] = await db.select({ id: sources.id }).from(sources)
+      .where(and(eq(sources.id, targetId), eq(sources.workspaceId, workspaceId)));
     if (row) return;
   }
   throw new Error("cible introuvable dans ce workspace");
@@ -158,6 +162,7 @@ export async function listJobs(workspaceId: string, filter: {
     targetTitle: sql<string | null>`(case
       when agent_jobs.target_type = 'idea' then (select i.title from ideas i where i.id = agent_jobs.target_id)
       when agent_jobs.target_type = 'content' then (select i2.title from contents c join ideas i2 on i2.id = c.idea_id where c.id = agent_jobs.target_id)
+      when agent_jobs.target_type = 'source' then (select coalesce(nullif(s.title, ''), s.ref) from sources s where s.id = agent_jobs.target_id)
       else null end)`,
   }).from(agentJobs)
     .where(and(...conds))
@@ -208,6 +213,17 @@ export async function completeJob(workspaceId: string, id: string, result: Recor
   const current = await getJob(workspaceId, id);
   if (current?.kind === "transcribe" && current.targetType === "comment" && typeof result.text !== "string")
     throw new Error("result.text requis pour un job transcribe");
+  // Même famille de garde que transcribe : un extract ne passe jamais done
+  // avec une source restée pending — le job reste running, le worker corrige
+  // (attach_extraction) puis retente.
+  if (current?.kind === "extract" && current.targetType === "source") {
+    // Import dynamique : sources.ts importe jobs.ts (createJob) — un import
+    // statique inverse ferait un cycle au chargement des modules.
+    const { getSource } = await import("@/lib/sources");
+    const src = await getSource(workspaceId, current.targetId);
+    if (!src || src.status !== "extracted")
+      throw new Error("complete refusé : source non extraite — appeler attach_extraction d'abord");
+  }
   const row = await finish(workspaceId, id, { status: "done", result });
   // Effet post-commit non bloquant : le job est déjà passé done, une erreur
   // ici ne doit jamais faire échouer l'appelant (même style que failJob).
@@ -250,6 +266,11 @@ async function applyFailureEffects(job: Job, message: string) {
     // Même raison : comments.ts importe jobs.ts pour createJob.
     const { failTranscription } = await import("@/lib/comments");
     await failTranscription(job.workspaceId, job.targetId);
+  }
+  if (job.kind === "extract" && job.targetType === "source") {
+    // Même raison d'import dynamique : sources.ts importe jobs.ts.
+    const { markSourceFailed } = await import("@/lib/sources");
+    await markSourceFailed(job.workspaceId, job.targetId, message);
   }
 }
 

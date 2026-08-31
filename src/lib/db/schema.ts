@@ -244,7 +244,7 @@ export const agentJobs = pgTable("agent_jobs", {
   workspaceId: uuid("workspace_id").notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
   kind: text("kind").notNull(),
-  targetType: text("target_type", { enum: ["idea", "content", "comment"] }).notNull(),
+  targetType: text("target_type", { enum: ["idea", "content", "comment", "source"] }).notNull(),
   targetId: uuid("target_id").notNull(),
   payload: jsonb("payload").notNull().default({}),
   status: text("status", { enum: ["queued", "running", "done", "failed", "cancelled"] })
