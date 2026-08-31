@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { ideas, sources } from "@/lib/db/schema";
 import { resolveMcpToken } from "@/lib/tenant";
+import { youtubeVideoId } from "@/lib/youtube";
+import { enqueueExtractJob } from "@/lib/sources";
 import {
   MAX_SOURCE_EXCERPT_LENGTH, MAX_SOURCE_REF_LENGTH, MAX_SOURCE_TITLE_LENGTH,
 } from "@/lib/sources";
@@ -105,6 +107,10 @@ export async function POST(req: NextRequest) {
     // Selection fallback (ignoré si non-string)
     const finalSelection = typeof selection === "string" ? selection : "";
 
+    // Même classification que la lib addSource (clip insère en direct pour
+    // la transaction idée+source, il doit donc classer lui-même).
+    const kind = youtubeVideoId(url) ? ("video" as const) : ("url" as const);
+
     // Transaction : créer l'idée, puis la source. Tout ou rien.
     const result = await db.transaction(async (tx) => {
       // Insérer l'idée
@@ -124,7 +130,7 @@ export async function POST(req: NextRequest) {
         .values({
           workspaceId: auth.workspaceId,
           ideaId: idea.id,
-          kind: "url",
+          kind,
           ref: url,
           rawExcerpt: finalSelection,
           createdBy: "clipper",
@@ -134,6 +140,12 @@ export async function POST(req: NextRequest) {
       if (!source) throw new Error("Erreur lors de la création de la source");
 
       return { ideaId: idea.id, sourceId: source.id };
+    });
+
+    // Non bloquant (même contrat qu'addSource) : si la pose du job échoue,
+    // la source reste pending et le bouton Réessayer couvre.
+    await enqueueExtractJob(auth.workspaceId, {
+      id: result.sourceId, kind, ref: url, createdBy: "clipper",
     });
 
     return json(result);
