@@ -294,6 +294,42 @@ describe("routes /api/watch/settings", () => {
     expect((await again.json()).publishConfig.api_key).toBe("••••1234");
   });
 
+  it("PATCH d'une clé merge avec l'existant — GET re-redigé montre les DEUX clés masquées", async () => {
+    const ws = await signUpTestUser();
+    await updateWatchSettings(ws.workspaceId, {
+      publishConfig: { api_key: "sk-abcd1234", secret: "sk-secret5678" },
+    });
+
+    // Le PATCH ne porte que sur api_key — impossible pour l'UI write-only de
+    // renvoyer `secret` en clair, il ne doit donc pas être effacé.
+    const r = await settingsPATCH(await authedReq(ws, "/api/watch/settings", patchInit({
+      publishConfig: { api_key: "sk-neuf-9999" },
+    })));
+    expect(r.status).toBe(200);
+    const settings = await r.json();
+    expect(settings.publishConfig.api_key).toBe("••••9999");
+    expect(settings.publishConfig.secret).toBe("••••5678");
+
+    const again = await settingsGET(await authedReq(ws, "/api/watch/settings"));
+    const settingsAgain = await again.json();
+    expect(settingsAgain.publishConfig.api_key).toBe("••••9999");
+    expect(settingsAgain.publishConfig.secret).toBe("••••5678");
+  });
+
+  it("PATCH publishConfig avec null supprime la clé", async () => {
+    const ws = await signUpTestUser();
+    await updateWatchSettings(ws.workspaceId, {
+      publishConfig: { api_key: "sk-abcd1234", secret: "sk-secret5678" },
+    });
+
+    const r = await settingsPATCH(await authedReq(ws, "/api/watch/settings", patchInit({
+      publishConfig: { secret: null },
+    })));
+    expect(r.status).toBe(200);
+    const settings = await r.json();
+    expect(settings.publishConfig).toEqual({ api_key: "••••1234" });
+  });
+
   it("PATCH channelKey inconnu → 400", async () => {
     const ws = await signUpTestUser();
     const r = await settingsPATCH(

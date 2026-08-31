@@ -325,18 +325,24 @@ export async function getWatchConfig(
   return { feeds, settings: row };
 }
 
-function validatePublishConfig(config: unknown): Record<string, string> {
+/** Valide la FORME d'un patch de publishConfig — pas son résultat final : le
+ * nombre de clés est vérifié après merge avec l'existant (voir
+ * updateWatchSettings), pas ici sur le patch seul, puisqu'un patch de pure
+ * suppression (valeurs `null`) peut légitimement viser plus de
+ * MAX_PUBLISH_CONFIG_KEYS clés. `null` est le marqueur de suppression :
+ * l'UI write-only ne peut jamais renvoyer une valeur en clair pour une clé
+ * qu'elle n'édite pas (masquée côté client, cf. redactPublishConfigForClient)
+ * — merger clé par clé est la seule façon de laisser les autres clés
+ * survivre à un PATCH partiel. */
+function validatePublishConfigPatch(config: unknown): Record<string, string | null> {
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
-    throw new Error("publishConfig invalide : objet de chaînes attendu");
+    throw new Error("publishConfig invalide : objet de chaînes (ou null pour supprimer) attendu");
   }
-  const entries = Object.entries(config);
-  if (entries.length > MAX_PUBLISH_CONFIG_KEYS) {
-    throw new Error(`publishConfig invalide : ${MAX_PUBLISH_CONFIG_KEYS} clés maximum`);
-  }
-  const result: Record<string, string> = {};
-  for (const [key, value] of entries) {
+  const result: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (value === null) { result[key] = null; continue; }
     if (typeof value !== "string") {
-      throw new Error(`publishConfig invalide : la valeur de "${key}" doit être une chaîne`);
+      throw new Error(`publishConfig invalide : la valeur de "${key}" doit être une chaîne ou null`);
     }
     if (value.length > MAX_PUBLISH_CONFIG_VALUE_LENGTH) {
       throw new Error(
@@ -357,24 +363,47 @@ export async function updateWatchSettings(
 ): Promise<WatchSettings> {
   await getWatchConfig(workspaceId); // garantit que la ligne existe déjà
 
-  const update: Record<string, unknown> = { updatedAt: new Date() };
-  if (patch.topics !== undefined) update.topics = patch.topics;
-  if (patch.style !== undefined) update.style = patch.style;
-  if (patch.requireMedia !== undefined) update.requireMedia = patch.requireMedia;
   if (patch.channelKey !== undefined) {
     const [channel] = await db.select().from(channels)
       .where(and(eq(channels.workspaceId, workspaceId), eq(channels.key, patch.channelKey)));
     if (!channel) throw new Error(`channel inconnu: ${patch.channelKey}`);
-    update.channelKey = patch.channelKey;
   }
-  if (patch.publishConfig !== undefined) {
-    update.publishConfig = validatePublishConfig(patch.publishConfig);
-  }
+  // Forme validée AVANT toute transaction — un patch mal formé ne doit pas
+  // en ouvrir une pour rien.
+  const publishConfigPatch = patch.publishConfig !== undefined
+    ? validatePublishConfigPatch(patch.publishConfig)
+    : undefined;
 
-  const [row] = await db.update(watchSettings).set(update as never)
-    .where(eq(watchSettings.workspaceId, workspaceId))
-    .returning();
-  return row as WatchSettings;
+  return db.transaction(async (tx) => {
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (patch.topics !== undefined) update.topics = patch.topics;
+    if (patch.style !== undefined) update.style = patch.style;
+    if (patch.requireMedia !== undefined) update.requireMedia = patch.requireMedia;
+    if (patch.channelKey !== undefined) update.channelKey = patch.channelKey;
+
+    if (publishConfigPatch !== undefined) {
+      // Ligne verrouillée le temps de la transaction : deux PATCH publishConfig
+      // concurrents ne peuvent pas tous deux merger sur la même base et
+      // perdre l'un des deux jeux de clés (write skew classique du
+      // read-modify-write).
+      const [current] = await tx.select({ publishConfig: watchSettings.publishConfig })
+        .from(watchSettings).where(eq(watchSettings.workspaceId, workspaceId)).for("update");
+      const merged: Record<string, string> = { ...(current?.publishConfig as Record<string, string> ?? {}) };
+      for (const [key, value] of Object.entries(publishConfigPatch)) {
+        if (value === null) delete merged[key];
+        else merged[key] = value;
+      }
+      if (Object.keys(merged).length > MAX_PUBLISH_CONFIG_KEYS) {
+        throw new Error(`publishConfig invalide : ${MAX_PUBLISH_CONFIG_KEYS} clés maximum`);
+      }
+      update.publishConfig = merged;
+    }
+
+    const [row] = await tx.update(watchSettings).set(update as never)
+      .where(eq(watchSettings.workspaceId, workspaceId))
+      .returning();
+    return row as WatchSettings;
+  });
 }
 
 /** publish_config est write-only côté navigateur (spec §3) — même triptyque de

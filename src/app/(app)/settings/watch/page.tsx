@@ -52,13 +52,11 @@ export default function WatchSettingsPage() {
   const [channels, setChannels] = useState<ChannelRow[]>([]);
 
   // Config de publication — write-only : jamais de valeur en clair reçue du
-  // serveur, seulement des clés + valeurs masquées (••••1234). `pending`
-  // accumule ce que CETTE session a effectivement écrit en clair, pour ne
-  // pas se re-écraser elle-même à la clé suivante — mais ne peut pas
-  // reconstituer une clé posée avant l'ouverture de la page : la
-  // remplacer redéfinit tout le bloc (voir avertissement affiché).
+  // serveur, seulement des clés + valeurs masquées (••••1234). Le PATCH
+  // serveur merge clé par clé avec l'existant (voir updateWatchSettings dans
+  // lib/watch.ts) : poser une clé n'efface pas les autres, envoyer `null`
+  // supprime la clé — pas besoin d'accumuler quoi que ce soit côté client.
   const [publishConfigView, setPublishConfigView] = useState<Record<string, string>>({});
-  const [pendingPublishConfig, setPendingPublishConfig] = useState<Record<string, string>>({});
   const [pubKey, setPubKey] = useState("");
   const [pubValue, setPubValue] = useState("");
   const [publishSaved, setPublishSaved] = useState(false);
@@ -232,7 +230,31 @@ export default function WatchSettingsPage() {
     }
   }
 
-  // --- Config de publication (write-only, remplacée en bloc) ---
+  // --- Config de publication (write-only, mergée clé par clé côté serveur) ---
+
+  // `null` sur une clé la supprime (voir updateWatchSettings) ; toute autre
+  // clé déjà en place, non mentionnée ici, survit — jamais besoin de la
+  // reconstituer côté client.
+  async function patchPublishConfig(entry: Record<string, string | null>) {
+    setSubmittingPublish(true);
+    try {
+      const res = await fetch("/api/watch/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ publishConfig: entry }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setError(body?.error ?? "Échec de l'enregistrement de la config de publication. Réessaie.");
+        return false;
+      }
+      const data = (await res.json()) as WatchSettingsRedacted;
+      setPublishConfigView(data.publishConfig);
+      return true;
+    } finally {
+      setSubmittingPublish(false);
+    }
+  }
 
   async function savePublishKey(e: React.FormEvent) {
     e.preventDefault();
@@ -243,31 +265,17 @@ export default function WatchSettingsPage() {
       setError("Clé requise.");
       return;
     }
-    // Accumule sur ce que CETTE session a déjà posé en clair, pour ne pas
-    // s'écraser elle-même d'un appel à l'autre — voir l'avertissement
-    // affiché sous ce formulaire pour ce que ça ne couvre PAS.
-    const merged = { ...pendingPublishConfig, [key]: pubValue };
-    setSubmittingPublish(true);
-    try {
-      const res = await fetch("/api/watch/settings", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ publishConfig: merged }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        setError(body?.error ?? "Échec de l'enregistrement de la config de publication. Réessaie.");
-        return;
-      }
-      const data = (await res.json()) as WatchSettingsRedacted;
-      setPendingPublishConfig(merged);
-      setPublishConfigView(data.publishConfig);
+    if (await patchPublishConfig({ [key]: pubValue })) {
       setPubKey("");
       setPubValue("");
       setPublishSaved(true);
-    } finally {
-      setSubmittingPublish(false);
     }
+  }
+
+  async function removeKey(key: string) {
+    setError(null);
+    setPublishSaved(false);
+    if (await patchPublishConfig({ [key]: null })) setPublishSaved(true);
   }
 
   function replaceKey(key: string) {
@@ -495,7 +503,8 @@ export default function WatchSettingsPage() {
           <p className="text-xs text-faint">
             Saisie seule : les valeurs ne sont jamais renvoyées en clair par le serveur, cette
             page n&apos;affiche donc que les clés existantes, valeur masquée. C&apos;est le
-            canal que le worker lit en clair pour publier (`get_watch_config`).
+            canal que le worker lit en clair pour publier (`get_watch_config`). Ajouter ou
+            remplacer une clé n&apos;efface pas les autres — le serveur merge clé par clé.
           </p>
 
           {Object.keys(publishConfigView).length === 0 ? (
@@ -511,9 +520,19 @@ export default function WatchSettingsPage() {
                     <code className="font-mono text-xs text-ink">{key}</code>
                     <code className="font-mono text-xs text-muted">{masked}</code>
                   </span>
-                  <Button variant="outline" size="sm" onClick={() => replaceKey(key)}>
-                    Remplacer
-                  </Button>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => replaceKey(key)}>
+                      Remplacer
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={submittingPublish}
+                      onClick={() => removeKey(key)}
+                    >
+                      Retirer
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -532,11 +551,6 @@ export default function WatchSettingsPage() {
                 onChange={(e) => setPubValue(e.target.value)}
               />
             </div>
-            <p className="text-xs text-warning">
-              Enregistrer ici remplace toute la config de publication d&apos;un bloc : toute
-              clé déjà en place mais non ressaisie dans CETTE session disparaît. Pour changer
-              plusieurs clés, les ajouter toutes avant d&apos;enregistrer si possible.
-            </p>
             {publishSaved && !error && <p className="text-sm text-success">Enregistré.</p>}
             <Button type="submit" disabled={submittingPublish || !pubKey.trim()}>
               {submittingPublish ? "Enregistrement…" : "Enregistrer"}

@@ -347,6 +347,42 @@ describe("getWatchConfig / updateWatchSettings", () => {
     await expect(updateWatchSettings(u.workspaceId, { publishConfig: trop }))
       .rejects.toThrow(/20/);
   });
+
+  it("publishConfig : merge clé par clé — une clé absente du patch survit", async () => {
+    const u = await signUpTestUser();
+    await updateWatchSettings(u.workspaceId, {
+      publishConfig: { api_key: "sk-abcd1234", secret: "xyz" },
+    });
+    // Le patch ne porte que sur api_key — impossible côté UI write-only de
+    // renvoyer `secret` en clair, elle ne doit donc pas disparaître.
+    const row = await updateWatchSettings(u.workspaceId, {
+      publishConfig: { api_key: "sk-nouveau-9999" },
+    });
+    expect(row.publishConfig).toEqual({ api_key: "sk-nouveau-9999", secret: "xyz" });
+  });
+
+  it("publishConfig : valeur null supprime la clé, les autres survivent", async () => {
+    const u = await signUpTestUser();
+    await updateWatchSettings(u.workspaceId, {
+      publishConfig: { api_key: "sk-abcd1234", secret: "xyz" },
+    });
+    const row = await updateWatchSettings(u.workspaceId, {
+      publishConfig: { secret: null as never },
+    });
+    expect(row.publishConfig).toEqual({ api_key: "sk-abcd1234" });
+  });
+
+  it("publishConfig : plus de 20 clés sur le RÉSULTAT mergé → throw, existant inchangé", async () => {
+    const u = await signUpTestUser();
+    await updateWatchSettings(u.workspaceId, { publishConfig: { existante: "v" } });
+    // 20 clés nouvelles + la clé déjà en place = 21 sur le résultat mergé,
+    // alors que le patch lui-même n'en compte que 20.
+    const encore = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, "v"]));
+    await expect(updateWatchSettings(u.workspaceId, { publishConfig: encore }))
+      .rejects.toThrow(/20/);
+    const { settings } = await getWatchConfig(u.workspaceId);
+    expect(settings.publishConfig).toEqual({ existante: "v" });
+  });
 });
 
 describe("redactPublishConfigForClient", () => {

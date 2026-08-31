@@ -527,7 +527,7 @@ const handler = createMcpHandler(
     server.registerTool(
       "update_watch_settings",
       {
-        description: "Met à jour les réglages veille (champs omis = inchangés). channel_key doit exister dans les canaux du workspace (sinon { error }) — c'est le canal sur lequel une validation crée son contenu. publish_config : objet de chaînes (20 clés max, 500 caractères par valeur), remplacé en bloc si fourni — la configuration de publication que get_watch_config rend en clair au worker.",
+        description: "Met à jour les réglages veille (champs omis = inchangés). channel_key doit exister dans les canaux du workspace (sinon { error }) — c'est le canal sur lequel une validation crée son contenu. publish_config : objet de chaînes (500 caractères par valeur, 20 clés max sur le résultat) mergé clé par clé avec l'existant si fourni — une clé fournie écrase ou ajoute, une clé absente du patch survit, une clé fournie à null est supprimée — la configuration de publication que get_watch_config rend en clair au worker.",
         inputSchema: {
           topics: z.array(z.string()).optional(),
           style: z.string().optional(),
