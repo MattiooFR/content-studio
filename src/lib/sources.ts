@@ -34,6 +34,15 @@ export const MAX_SOURCE_TEXT_LENGTH = 200_000;
 export const MAX_SOURCE_EXTRACTED_LENGTH = 1_500_000;
 
 export async function addSource(workspaceId: string, input: AddSourceInput) {
+  // text fourni avec une URL : c'est un extrait attaché à cette URL (même
+  // règle que l'UI) — jamais perdu en silence. Les deux à la fois = ambigu.
+  if ((input.kind === "url" || input.kind === "video") && input.text !== undefined) {
+    if (input.rawExcerpt !== undefined) {
+      throw new Error("text non disponible pour kind url/video — utilise rawExcerpt");
+    }
+    input = { ...input, rawExcerpt: input.text, text: undefined };
+  }
+
   let kind = input.kind;
   if (!AVAILABLE_KINDS.includes(kind)) {
     throw new Error("kind non disponible (pdf/audio attendent la table assets)");

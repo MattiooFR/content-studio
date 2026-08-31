@@ -175,6 +175,10 @@ fasse à la main en dépannage.
   texte scrollable ; le titre reste dans l'en-tête de la ligne (pas dupliqué dans le
   panneau) et les méta site/durée/langue de `extracted_meta` n'y sont pas encore
   affichées — accepté pour la clôture v1.1, à reprendre si l'usage le demande.
+- **Déviation assumée (revue finale)** : l'indice worker s'affiche dès qu'une source est
+  `pending`, sans distinguer job en attente / extraction en cours — copie neutre
+  (« en attente ou en cours ») couvrant les deux états, plutôt qu'un câblage useJobs par
+  source.
 - **Live** : abonnement `source.updated` → refetch de la liste.
 
 ---

@@ -229,7 +229,7 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
         )}
         {sourcesList.some((s) => s.status === "pending") && (
           <p className="mt-2 text-xs text-faint">
-            Extraction en attente d&apos;un worker — lancer <code>node scripts/extract-worker.mjs</code> sur le Mac.
+            Extraction en attente ou en cours — worker : <code>node scripts/extract-worker.mjs</code> sur le Mac.
           </p>
         )}
       </SectionCard>

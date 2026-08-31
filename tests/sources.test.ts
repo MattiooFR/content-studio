@@ -219,6 +219,23 @@ describe("sources — kinds v1.1 (video YouTube, text long, job extract)", () =>
       addSource(ws.workspaceId, { ideaId: idea.id, kind: "text", text: "x".repeat(MAX_SOURCE_TEXT_LENGTH + 1) })
     ).rejects.toThrow(/text trop long/);
   });
+
+  it("text fourni avec kind url : replié en rawExcerpt, jamais perdu ; text + rawExcerpt ensemble → refusé", async () => {
+    const ws = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+    const source = await addSource(ws.workspaceId, {
+      ideaId: idea.id, kind: "url", ref: "https://exemple.fr/avec-note", text: "ma note sur l'article",
+    });
+    expect(source.rawExcerpt).toBe("ma note sur l'article");
+    expect(source.extractedText).toBe("");
+    expect(source.status).toBe("pending");
+    await expect(
+      addSource(ws.workspaceId, {
+        ideaId: idea.id, kind: "url", ref: "https://exemple.fr/x",
+        text: "note", rawExcerpt: "extrait",
+      })
+    ).rejects.toThrow(/text non disponible/);
+  });
 });
 
 describe("sources — extraction : borne, titre, réessai, événements", () => {
