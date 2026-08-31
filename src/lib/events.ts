@@ -16,7 +16,9 @@ export type WorkspaceEvent =
   // vague « sources & extraction » : transitions d'une source (pending → extracted/failed, réessai)
   | { type: "source.updated"; sourceId: string; ideaId: string; status: string }
   // création, mise à jour, ou changement de transcription d'un commentaire
-  | { type: "comment.updated"; contentId: string; commentId: string; status: string; transcription: string };
+  | { type: "comment.updated"; contentId: string; commentId: string; status: string; transcription: string }
+  // module veille : dépôt (itemId absent = lot, l'UI refetch) ou décision
+  | { type: "watch.updated"; itemId?: string; status?: string };
 
 type Handler = (e: WorkspaceEvent) => void;
 
