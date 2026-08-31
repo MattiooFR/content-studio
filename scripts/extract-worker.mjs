@@ -61,16 +61,47 @@ async function call(name, args = {}) {
 
 // ---- extracteurs -----------------------------------------------------------
 
+// Hôtes interdits : le worker tourne sur le Mac du propriétaire — ne jamais
+// aspirer le LAN pour le compte d'un membre du workspace. DNS-rebinding hors
+// périmètre (outil personnel) : on filtre schéma, hôtes et IP littérales,
+// pas la résolution DNS — risque résiduel accepté.
+function assertPublicHttpUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch { throw new Error("ref doit être une URL http(s)"); }
+  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("ref doit être une URL http(s)");
+  const host = u.hostname.toLowerCase();
+  const prive =
+    host === "localhost" || host.endsWith(".local") || host === "0.0.0.0" ||
+    /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host) ||
+    host === "[::1]" || host.startsWith("[fe80:") || host.startsWith("[fc") || host.startsWith("[fd");
+  if (prive) throw new Error(`hôte privé ou local refusé (${host})`);
+  return u;
+}
+
 async function extractUrl(ref) {
-  const res = await fetch(ref, {
-    signal: AbortSignal.timeout(30_000),
-    redirect: "follow",
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-      accept: "text/html,application/xhtml+xml",
-    },
-  });
+  let url = assertPublicHttpUrl(ref);
+  let res;
+  // Redirections À LA MAIN : un 302 vers http://192.168.1.1 ne doit jamais être suivi.
+  for (let hop = 0; hop < 5; hop++) {
+    res = await fetch(url, {
+      signal: AbortSignal.timeout(30_000),
+      redirect: "manual",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        accept: "text/html,application/xhtml+xml",
+      },
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) throw new Error(`redirection ${res.status} sans Location`);
+      url = assertPublicHttpUrl(new URL(location, url).href);
+      continue;
+    }
+    break;
+  }
+  if (res.status >= 300 && res.status < 400) throw new Error("trop de redirections (max 5)");
   if (!res.ok) throw new Error(`fetch ${res.status} ${res.statusText}`);
   const type = res.headers.get("content-type") ?? "";
   if (!type.includes("html")) {
@@ -94,13 +125,14 @@ async function extractUrl(ref) {
 }
 
 async function extractVideo(ref) {
+  if (!/^https?:\/\//i.test(ref)) throw new Error("ref doit être une URL http(s)");
   const dir = await mkdtemp(join(tmpdir(), "cs-extract-"));
   try {
     // -j --no-simulate : télécharge ET rend les métadonnées JSON sur stdout.
     const { stdout } = await run(
       "yt-dlp",
       ["--no-playlist", "-x", "--audio-format", "m4a",
-        "-o", join(dir, "audio.%(ext)s"), "-j", "--no-simulate", ref],
+        "-o", join(dir, "audio.%(ext)s"), "-j", "--no-simulate", "--", ref],
       { maxBuffer: 64 * 1024 * 1024 },
     );
     const info = JSON.parse(stdout);
