@@ -1,5 +1,5 @@
 import {
-  pgTable, text, timestamp, uuid, jsonb, boolean, integer,
+  pgTable, text, timestamp, uuid, jsonb, boolean, integer, doublePrecision,
   uniqueIndex, index, customType,
 } from "drizzle-orm/pg-core";
 
@@ -334,4 +334,75 @@ export const assets = pgTable("assets", {
   meta: jsonb("meta").notNull().default({}),
   createdBy: text("created_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// ---- veille : propositions d'un worker de sourcing externe ----------------
+// Générique par charte : « un post social », jamais une plateforme nommée.
+// Le worker dépose (pool = corpus exploré, proposed = file du matin) ; le
+// studio décide (validated/refused/expired). Un item décidé est immuable
+// pour le worker (voir lib/watch.ts, upsertWatchItems).
+export const watchItems = pgTable("watch_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  externalId: text("external_id").notNull(),
+  url: text("url"),
+  // { name?, handle?, avatar_url?, followers? } — champs libres du worker.
+  author: jsonb("author").notNull().default({}),
+  textSource: text("text_source").notNull(),
+  lang: text("lang"),
+  postedAt: timestamp("posted_at"),
+  // compteurs libres posés par le worker (likes, partages, sauvegardes…).
+  metrics: jsonb("metrics").notNull().default({}),
+  // URLs d'images/vidéos du post source.
+  media: jsonb("media").notNull().default([]),
+  // analyse du visuel par le worker : { type, description, reproducibility,
+  // how_to, text_read } — null si pas de visuel analysé.
+  visual: jsonb("visual"),
+  textAdapted: text("text_adapted"),
+  score: doublePrecision("score"),
+  status: text("status", {
+    enum: ["pool", "proposed", "validated", "refused", "expired"],
+  }).notNull(),
+  refusalReason: text("refusal_reason"),
+  refusalNote: text("refusal_note"),
+  // lien de publication porté par l'item lui-même (historique importé) ; les
+  // validations neuves passent par publications (spec §3).
+  publishRef: jsonb("publish_ref"),
+  ideaId: uuid("idea_id").references(() => ideas.id, { onDelete: "set null" }),
+  contentId: uuid("content_id").references(() => contents.id, { onDelete: "set null" }),
+  fetchedAt: timestamp("fetched_at").notNull().defaultNow(),
+  decidedAt: timestamp("decided_at"),
+}, (t) => [
+  uniqueIndex("watch_items_ws_external").on(t.workspaceId, t.externalId),
+  index("watch_items_ws_status_score").on(t.workspaceId, t.status, t.score),
+  index("watch_items_ws_status_fetched").on(t.workspaceId, t.status, t.fetchedAt),
+]);
+
+export const watchFeeds = pgTable("watch_feeds", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: ["account", "query"] }).notNull(),
+  label: text("label").notNull(),
+  // interprétés par le worker (cadence, langue, fenêtre…), opaques ici.
+  params: jsonb("params").notNull().default({}),
+  enabled: boolean("enabled").notNull().default(true),
+  lastFetchedAt: timestamp("last_fetched_at"),
+}, (t) => [uniqueIndex("watch_feeds_ws_kind_label").on(t.workspaceId, t.kind, t.label)]);
+
+// PK workspace_id : jumeau de workspace_settings. publish_config est
+// write-only côté navigateur (redaction, cf. lib/watch.ts) ; le MCP le lit
+// en clair — c'est le canal du worker, même statut que gauge_sources.headers.
+export const watchSettings = pgTable("watch_settings", {
+  workspaceId: uuid("workspace_id").primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  topics: text("topics").array().notNull().default([]),
+  style: text("style").notNull().default(""),
+  requireMedia: boolean("require_media").notNull().default(false),
+  // canal du workspace sur lequel une validation crée son contenu — requis
+  // pour valider (spec §3), configuré dans les réglages veille.
+  channelKey: text("channel_key"),
+  publishConfig: jsonb("publish_config").notNull().default({}),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
