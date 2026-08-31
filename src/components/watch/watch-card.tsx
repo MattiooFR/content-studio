@@ -38,6 +38,10 @@ export type WatchItemDTO = {
   score: number | null;
   status: "pool" | "proposed" | "validated" | "refused" | "expired";
   publicationUrl?: string | null;
+  // Posé par create_idea (radar) : idée déjà repêchée depuis cet item pool.
+  // Absent sur les DTO plus anciens qui ne le sélectionnent pas explicitement
+  // — optionnel plutôt que `string | null` pour ne rien casser côté /watch.
+  ideaId?: string | null;
 };
 
 const REFUSAL_LABELS: Record<WatchRefusalReason, string> = {
@@ -61,6 +65,93 @@ function nombre(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+/** Nom affiché d'un item (nom > handle > repli) — partagé entre l'écran du
+ * matin (aria-labels de WatchCard) et le radar. */
+export function nomAuteurAffiche(item: WatchItemDTO): string {
+  const auteur = item.author ?? {};
+  return auteur.name || auteur.handle || "Auteur inconnu";
+}
+
+/**
+ * Aperçu du post source, partagé entre l'écran du matin (`WatchCard`,
+ * colonne gauche) et le radar (`/watch/radar`, où il constitue toute la
+ * carte hormis le bouton d'action) : auteur, texte, compteurs, image, bloc
+ * visuel « comment refaire ».
+ */
+export function WatchSourcePreview({ item }: { item: WatchItemDTO }) {
+  const auteur = item.author ?? {};
+  const nomAffiche = nomAuteurAffiche(item);
+  const metrics = item.metrics ?? {};
+  const metricsEntries = Object.entries(metrics).filter(([, v]) => nombre(v) !== null);
+  const saves = "saves" in metrics ? nombre(metrics.saves) : undefined;
+  const likes = "likes" in metrics ? nombre(metrics.likes) : undefined;
+  const ratio =
+    "saves" in metrics && "likes" in metrics ? ratioMetriques(saves, likes) : null;
+  const image = Array.isArray(item.media) && typeof item.media[0] === "string" ? item.media[0] : null;
+  const age = item.postedAt ? ageRelatif(new Date(item.postedAt), new Date()) : null;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2.5">
+        {auteur.avatar_url ? (
+          // eslint-disable-next-line @next/next/no-img-element -- image externe, source arbitraire déposée par le worker
+          <img
+            src={auteur.avatar_url}
+            alt=""
+            className="size-9 shrink-0 rounded-full border border-line object-cover"
+          />
+        ) : (
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full border border-line bg-raised text-xs font-medium text-muted">
+            {initiales(auteur)}
+          </span>
+        )}
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-ink">{nomAffiche}</p>
+          {auteur.handle && auteur.name && (
+            <p className="truncate text-xs text-faint">@{auteur.handle.replace(/^@/, "")}</p>
+          )}
+        </div>
+        {age && <span className="ml-auto shrink-0 text-[11px] text-faint tabular-nums">{age}</span>}
+      </div>
+
+      <p className="whitespace-pre-wrap text-sm text-ink">{item.textSource}</p>
+
+      {metricsEntries.length > 0 && (
+        <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          {metricsEntries.map(([cle, valeur]) => (
+            <div key={cle} className="flex items-center gap-1">
+              <dt className="text-faint">{cle}</dt>
+              <dd className="text-ink tabular-nums">{formaterCompteur(nombre(valeur))}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {ratio && (
+        <p className="text-xs text-muted">
+          Ratio saves / likes : <span className="text-ink tabular-nums">{ratio}</span>
+        </p>
+      )}
+
+      {image && (
+        // eslint-disable-next-line @next/next/no-img-element -- image externe, source arbitraire déposée par le worker
+        <img
+          src={image}
+          alt="Image du post source"
+          className="max-h-48 w-full rounded-lg border border-line object-cover"
+        />
+      )}
+
+      {item.visual && (
+        <div className="rounded-lg border border-line bg-raised/40 p-3 text-xs">
+          <p className="font-medium text-ink">{item.visual.type ?? "Visuel"}</p>
+          {item.visual.how_to && <p className="mt-1 text-muted">{item.visual.how_to}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WatchCard({
   item,
   busy,
@@ -78,16 +169,7 @@ export function WatchCard({
   const [motif, setMotif] = useState<string>("");
   const [note, setNote] = useState("");
 
-  const auteur = item.author ?? {};
-  const nomAffiche = auteur.name || auteur.handle || "Auteur inconnu";
-  const metrics = item.metrics ?? {};
-  const metricsEntries = Object.entries(metrics).filter(([, v]) => nombre(v) !== null);
-  const saves = "saves" in metrics ? nombre(metrics.saves) : undefined;
-  const likes = "likes" in metrics ? nombre(metrics.likes) : undefined;
-  const ratio =
-    "saves" in metrics && "likes" in metrics ? ratioMetriques(saves, likes) : null;
-  const image = Array.isArray(item.media) && typeof item.media[0] === "string" ? item.media[0] : null;
-  const age = item.postedAt ? ageRelatif(new Date(item.postedAt), new Date()) : null;
+  const nomAffiche = nomAuteurAffiche(item);
 
   function submitValidate() {
     const original = item.textAdapted ?? "";
@@ -101,64 +183,7 @@ export function WatchCard({
   return (
     <div className="grid gap-4 rounded-xl border border-line bg-surface p-4 lg:grid-cols-2">
       {/* Colonne gauche : le post source tel que déposé par le worker. */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2.5">
-          {auteur.avatar_url ? (
-            // eslint-disable-next-line @next/next/no-img-element -- image externe, source arbitraire déposée par le worker
-            <img
-              src={auteur.avatar_url}
-              alt=""
-              className="size-9 shrink-0 rounded-full border border-line object-cover"
-            />
-          ) : (
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full border border-line bg-raised text-xs font-medium text-muted">
-              {initiales(auteur)}
-            </span>
-          )}
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-ink">{nomAffiche}</p>
-            {auteur.handle && auteur.name && (
-              <p className="truncate text-xs text-faint">@{auteur.handle.replace(/^@/, "")}</p>
-            )}
-          </div>
-          {age && <span className="ml-auto shrink-0 text-[11px] text-faint tabular-nums">{age}</span>}
-        </div>
-
-        <p className="whitespace-pre-wrap text-sm text-ink">{item.textSource}</p>
-
-        {metricsEntries.length > 0 && (
-          <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-            {metricsEntries.map(([cle, valeur]) => (
-              <div key={cle} className="flex items-center gap-1">
-                <dt className="text-faint">{cle}</dt>
-                <dd className="text-ink tabular-nums">{formaterCompteur(nombre(valeur))}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-
-        {ratio && (
-          <p className="text-xs text-muted">
-            Ratio saves / likes : <span className="text-ink tabular-nums">{ratio}</span>
-          </p>
-        )}
-
-        {image && (
-          // eslint-disable-next-line @next/next/no-img-element -- image externe, source arbitraire déposée par le worker
-          <img
-            src={image}
-            alt="Image du post source"
-            className="max-h-48 w-full rounded-lg border border-line object-cover"
-          />
-        )}
-
-        {item.visual && (
-          <div className="rounded-lg border border-line bg-raised/40 p-3 text-xs">
-            <p className="font-medium text-ink">{item.visual.type ?? "Visuel"}</p>
-            {item.visual.how_to && <p className="mt-1 text-muted">{item.visual.how_to}</p>}
-          </div>
-        )}
-      </div>
+      <WatchSourcePreview item={item} />
 
       {/* Colonne droite : la décision — adapter, valider ou refuser. */}
       <div className="flex flex-col gap-3">
