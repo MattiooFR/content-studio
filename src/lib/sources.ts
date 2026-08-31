@@ -193,9 +193,16 @@ export async function retrySourceExtraction(workspaceId: string, sourceId: strin
   }
   const [row] = await db.update(sources)
     .set({ status: "pending", extractedMeta: {}, updatedAt: new Date() })
-    .where(and(eq(sources.id, sourceId), eq(sources.workspaceId, workspaceId)))
+    .where(and(
+      eq(sources.id, sourceId),
+      eq(sources.workspaceId, workspaceId),
+      eq(sources.status, "failed") // Garde : évite le TOCTOU si la source change entre-temps
+    ))
     .returning();
-  if (!row) return null;
+  if (!row) {
+    // Le statut a changé entre le check et l'update (ex. attachExtraction concurrent)
+    throw new Error("réessai refusé : la source a changé entre-temps");
+  }
 
   const failedJobs = await listJobs(workspaceId, {
     kind: "extract", targetType: "source", targetId: sourceId, status: "failed",
