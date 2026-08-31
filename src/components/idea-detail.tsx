@@ -8,6 +8,8 @@ import { MarkdownView } from "@/components/markdown-view";
 import { StatusBadge } from "@/components/cockpit/status-badge";
 import { JobStatus } from "@/components/cockpit/job-status";
 import { useJobs } from "@/hooks/use-jobs";
+import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
+import { youtubeVideoId } from "@/lib/youtube";
 import type { WorkspaceItemRef } from "@/lib/workspace-url";
 
 type Idea = { id: string; title: string; notes: string; status: string };
@@ -15,7 +17,7 @@ type Content = { id: string; channelId: string; status: string; type: string };
 type Channel = { id: string; key: string; name: string };
 type Source = {
   id: string; kind: string; ref: string; title: string;
-  extractedText: string; status: string;
+  extractedText: string; extractedMeta: Record<string, unknown>; status: string;
 };
 
 export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem: (ref: WorkspaceItemRef) => void }) {
@@ -61,6 +63,11 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
     fetch("/api/channels").then((r) => { if (r.ok) r.json().then(setChannels); });
   }, [load]);
 
+  // live : une extraction de source de CETTE idée progresse ailleurs (worker, autre onglet)
+  useWorkspaceEvents((e) => {
+    if (e.type === "source.updated" && e.ideaId === ideaId) load();
+  });
+
   async function decline(channelKey: string) {
     const res = await fetch("/api/contents", {
       method: "POST",
@@ -83,19 +90,17 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
     const text = sourceText.trim();
     // deux modes, un seul bouton : l'URL prime si les deux champs sont
     // remplis (le texte devient alors un extrait attaché à cette URL).
-    const kind = url ? "url" : "text";
-    const ref = url || text;
-    if (!ref) {
+    if (!url && !text) {
       setSourceError("Renseigne une URL ou colle du texte.");
       return;
     }
+    const body = url
+      ? { kind: "url", ref: url, rawExcerpt: text || undefined }
+      : { kind: "text", text };
     const res = await fetch(`/api/ideas/${ideaId}/sources`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind, ref,
-        rawExcerpt: url && text ? text : undefined,
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const { error: message } = await res.json().catch(() => ({ error: null }));
@@ -104,6 +109,17 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
     }
     setSourceError(null);
     setSourceUrl(""); setSourceText("");
+    load();
+  }
+
+  async function retrySource(id: string) {
+    const res = await fetch(`/api/sources/${id}/retry`, { method: "POST" });
+    if (!res.ok) {
+      const { error: message } = await res.json().catch(() => ({ error: null }));
+      setSourceError(message ?? "Réessai impossible.");
+      return;
+    }
+    setSourceError(null);
     load();
   }
 
@@ -139,8 +155,18 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
         <form onSubmit={addSourceSubmit} className="space-y-2">
           <Input placeholder="https://…" value={sourceUrl}
             onChange={(e) => setSourceUrl(e.target.value)} />
+          {youtubeVideoId(sourceUrl.trim()) && (
+            <p className="text-xs text-accent">
+              Vidéo YouTube détectée — l&apos;audio sera transcrit en local (mlx-whisper).
+            </p>
+          )}
           <Textarea placeholder="…ou colle un texte" value={sourceText}
             onChange={(e) => setSourceText(e.target.value)} rows={3} />
+          {sourceText.length > 1000 && (
+            <p className="text-right text-[11px] text-faint tabular-nums">
+              {sourceText.length.toLocaleString("fr-FR")} / 200 000 caractères
+            </p>
+          )}
           {sourceError && <p className="text-sm text-danger">{sourceError}</p>}
           <div className="flex justify-end">
             <Button type="submit">Ajouter</Button>
@@ -164,6 +190,9 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
                     }
                     className="flex w-full items-center justify-between gap-3 rounded-lg border border-line bg-raised/40 p-3 text-left transition-colors duration-150 hover:border-line-strong"
                   >
+                    <span className="shrink-0 text-[10px] tracking-widest text-faint uppercase">
+                      {s.kind === "video" ? "vidéo" : s.kind === "url" ? "article" : "texte"}
+                    </span>
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">
                       {s.title || s.ref}
                     </span>
@@ -173,16 +202,35 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
                       className={s.status === "pending" ? "animate-pulse" : undefined}
                     />
                   </button>
+                  {s.status === "failed" && (
+                    <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/10 p-2">
+                      <p className="min-w-0 flex-1 text-xs text-danger">
+                        {typeof s.extractedMeta.error === "string" && s.extractedMeta.error
+                          ? s.extractedMeta.error
+                          : "extraction échouée"}
+                      </p>
+                      <Button variant="outline" onClick={() => retrySource(s.id)}>Réessayer</Button>
+                    </div>
+                  )}
                   {extractable && openSourceId === s.id && (
-                    <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-line bg-bg p-3 text-xs leading-5 whitespace-pre-wrap">
-                      {s.extractedText.slice(0, 500)}
-                      {s.extractedText.length > 500 ? "…" : ""}
-                    </pre>
+                    <div className="mt-2 rounded-lg border border-line bg-bg">
+                      <p className="border-b border-line px-3 py-1.5 text-[11px] text-faint tabular-nums">
+                        {s.extractedText.split(/\s+/).filter(Boolean).length} mots
+                      </p>
+                      <pre className="max-h-72 overflow-auto p-3 text-xs leading-5 whitespace-pre-wrap">
+                        {s.extractedText}
+                      </pre>
+                    </div>
                   )}
                 </li>
               );
             })}
           </ul>
+        )}
+        {sourcesList.some((s) => s.status === "pending") && (
+          <p className="mt-2 text-xs text-faint">
+            Extraction en attente d&apos;un worker — lancer <code>node scripts/extract-worker.mjs</code> sur le Mac.
+          </p>
         )}
       </SectionCard>
 
