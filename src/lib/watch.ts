@@ -54,6 +54,10 @@ export async function upsertWatchItems(
   let written = 0, skipped = 0;
   await db.transaction(async (tx) => {
     for (const i of items) {
+      // Verrou consultatif par (workspace, external_id) le temps de la transaction :
+      // deux upserts simultanés d'un nouvel external_id ne peuvent pas tous deux
+      // conclure « n'existe pas » et insérer chacun le leur.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${workspaceId}:watch:${i.externalId}`}))`);
       const [existing] = await tx.select().from(watchItems)
         .where(and(eq(watchItems.workspaceId, workspaceId), eq(watchItems.externalId, i.externalId)))
         .for("update");
@@ -62,9 +66,10 @@ export async function upsertWatchItems(
       if (existing && DECIDED.includes(existing.status as WatchStatus)) { skipped++; continue; }
 
       const commun: Record<string, unknown> = {
-        metrics: i.metrics ?? {}, fetchedAt: new Date(),
+        fetchedAt: new Date(),
       };
       if (i.author !== undefined) commun.author = i.author;
+      if (i.metrics !== undefined) commun.metrics = i.metrics;
       if (i.media !== undefined) commun.media = i.media;
       if (i.visual !== undefined) commun.visual = i.visual;
       if (i.score !== undefined) commun.score = i.score;
@@ -75,6 +80,7 @@ export async function upsertWatchItems(
           textSource: i.textSource, url: i.url, lang: i.lang,
           postedAt: i.postedAt ? new Date(i.postedAt) : undefined,
           textAdapted: i.textAdapted,
+          metrics: i.metrics ?? {},
           ...commun,
         } as never);
       } else if (existing.status === "proposed" && i.status === "pool") {
@@ -130,8 +136,13 @@ export async function countWatchItems(workspaceId: string, status: WatchStatus):
 export async function refuseWatchItem(
   workspaceId: string, itemId: string, opts: Record<string, unknown>
 ): Promise<void> {
-  await db.update(watchItems).set({
+  const [updated] = await db.update(watchItems).set({
     status: "refused" as never,
     decidedAt: new Date(),
-  }).where(and(eq(watchItems.workspaceId, workspaceId), eq(watchItems.id, itemId)));
+  }).where(and(
+    eq(watchItems.workspaceId, workspaceId), eq(watchItems.id, itemId),
+    eq(watchItems.status, "proposed")
+  )).returning();
+  if (!updated)
+    throw new Error("l'item doit être en statut proposed pour être refusé");
 }

@@ -71,6 +71,39 @@ describe("upsertWatchItems", () => {
     expect(await listWatchItems(b.workspaceId, {})).toEqual([]);
     expect(await countWatchItems(b.workspaceId, "proposed")).toBe(0);
   });
+
+  it("update sans metrics → les metrics stockées survivent", async () => {
+    const u = await signUpTestUser();
+    await upsertWatchItems(u.workspaceId, [item({ metrics: { likes: 10, saves: 8 } })]);
+    // Update sans metrics : les métriques doivent survivre
+    await upsertWatchItems(u.workspaceId, [item({ score: 20, metrics: undefined })]);
+    const [row] = await listWatchItems(u.workspaceId, { status: "proposed" });
+    expect(row.metrics).toEqual({ likes: 10, saves: 8 });
+    expect(row.score).toBe(20);
+  });
+});
+
+describe("refuseWatchItem", () => {
+  it("refuse un item pool → throw, l'item ne bouge pas", async () => {
+    const u = await signUpTestUser();
+    await upsertWatchItems(u.workspaceId, [item({ status: "pool" })]);
+    const { refuseWatchItem } = await import("@/lib/watch");
+    const [row] = await listWatchItems(u.workspaceId, { status: "pool" });
+    await expect(refuseWatchItem(u.workspaceId, row.id, {}))
+      .rejects.toThrow(/proposed/);
+    const [after] = await listWatchItems(u.workspaceId, { status: "pool" });
+    expect(after.status).toBe("pool");
+  });
+
+  it("refuse un item déjà refused → throw", async () => {
+    const u = await signUpTestUser();
+    await upsertWatchItems(u.workspaceId, [item()]);
+    const { refuseWatchItem } = await import("@/lib/watch");
+    const [row] = await listWatchItems(u.workspaceId, { status: "proposed" });
+    await refuseWatchItem(u.workspaceId, row.id, {});
+    await expect(refuseWatchItem(u.workspaceId, row.id, {}))
+      .rejects.toThrow(/proposed/);
+  });
 });
 
 describe("listWatchItems", () => {
