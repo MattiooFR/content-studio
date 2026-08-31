@@ -413,10 +413,12 @@ const handler = createMcpHandler(
     const watchItemSchema = z.object({
       external_id: z.string().trim().min(1),
       // NOTE : pas un z.enum(["pool","proposed"]) — un rejet zod ici sort en
-      // ProtocolError JSON-RPC (InvalidParams), pas en `{ error }` (vérifié
-      // dans @modelcontextprotocol/server, mcp-DXXb3Vv3.mjs:1432). Le contrat
-      // veut un statut invalide rendu en { error } : on laisse passer la
-      // chaîne et c'est validateItem (lib/watch.ts) qui tranche et jette.
+      // tool-result isError:true avec un texte brut NON JSON (vérifié dans
+      // @modelcontextprotocol/server, mcp-DXXb3Vv3.mjs:1432), pas en `{ error
+      // }` dans le content. Le contrat veut un statut invalide rendu en
+      // { error } (parseable) : on laisse passer la chaîne et c'est
+      // validateItem (lib/watch.ts) qui tranche et jette, capté par le
+      // try/catch du handler ci-dessous.
       status: z.string(),
       text_source: z.string().min(1),
       url: z.string().url().optional(),
@@ -470,10 +472,19 @@ const handler = createMcpHandler(
           limit: z.number().int().positive().max(500).optional(),
         },
       },
-      async ({ status, since, limit }, extra) =>
-        json(await listWatchItems(wsOf(extra), {
-          status, since: since ? new Date(since) : undefined, limit,
-        }))
+      async ({ status, since, limit }, extra) => {
+        if (since !== undefined && Number.isNaN(Date.parse(since))) {
+          return json({ error: "since invalide (ISO 8601 attendu)" });
+        }
+        try {
+          return json(await listWatchItems(wsOf(extra), {
+            status, since: since ? new Date(since) : undefined, limit,
+          }));
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
     );
 
     server.registerTool(

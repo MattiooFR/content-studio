@@ -45,6 +45,15 @@ describe("MCP — veille", () => {
     expect(JSON.parse(r.texte).error).toMatch(/statut invalide/);
   });
 
+  it("list_watch_items avec since invalide → { error } parseable, pas un texte brut isError", async () => {
+    const u = await signUpTestUser();
+    const { token } = await generateMcpToken(u.workspaceId, "test");
+
+    const r = await callMcpTool(token, "list_watch_items", { since: "garbage" });
+    expect(r.rpc.error).toBeUndefined();
+    expect(JSON.parse(r.texte).error).toMatch(/since invalide/);
+  });
+
   it("upsert_watch_feed + mark_feed_fetched posent feed et date", async () => {
     const u = await signUpTestUser();
     const { token } = await generateMcpToken(u.workspaceId, "test");
