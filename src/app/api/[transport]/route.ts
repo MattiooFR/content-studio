@@ -16,6 +16,10 @@ import {
 } from "@/lib/sources";
 import { listJobs, claimJob, heartbeatJob, completeJob, failJob, JobStateError } from "@/lib/jobs";
 import { listPublications, linkPublication, markSynced } from "@/lib/publications";
+import {
+  getWatchConfig, upsertWatchItems, listWatchItems, markFeedFetched,
+  upsertWatchFeed, updateWatchSettings,
+} from "@/lib/watch";
 
 // NOTE version : mcp-handler 2.1.0 exporte à la fois `withMcpAuth` et
 // `experimental_withMcpAuth` (alias identique). On utilise le nom stable.
@@ -403,6 +407,154 @@ const handler = createMcpHandler(
       },
       async ({ publication_id, body_hash }, extra) =>
         json((await markSynced(wsOf(extra), publication_id, body_hash)) ?? { error: "publication introuvable dans ce workspace" })
+    );
+
+    // ---- veille : dépôt/lecture du worker externe, réglages posés par l'UI ---
+    const watchItemSchema = z.object({
+      external_id: z.string().trim().min(1),
+      // NOTE : pas un z.enum(["pool","proposed"]) — un rejet zod ici sort en
+      // tool-result isError:true avec un texte brut NON JSON (vérifié dans
+      // @modelcontextprotocol/server, mcp-DXXb3Vv3.mjs:1432), pas en `{ error
+      // }` dans le content. Le contrat veut un statut invalide rendu en
+      // { error } (parseable) : on laisse passer la chaîne et c'est
+      // validateItem (lib/watch.ts) qui tranche et jette, capté par le
+      // try/catch du handler ci-dessous.
+      status: z.string(),
+      text_source: z.string().min(1),
+      url: z.string().url().optional(),
+      author: z.record(z.string(), z.unknown()).optional(),
+      lang: z.string().optional(),
+      posted_at: z.string().optional(),
+      metrics: z.record(z.string(), z.unknown()).optional(),
+      media: z.array(z.unknown()).optional(),
+      visual: z.record(z.string(), z.unknown()).optional(),
+      text_adapted: z.string().optional(),
+      score: z.number().optional(),
+    });
+
+    server.registerTool(
+      "get_watch_config",
+      {
+        description: "Réglages veille (topics, style, require_media, channel_key) et feeds actifs du workspace. publish_config est rendu EN CLAIR ici (jamais dans l'UI, qui le rédige) : c'est la configuration de publication du worker sur le canal de veille — à traiter comme un secret côté worker, ne jamais la reloguer.",
+        inputSchema: {},
+      },
+      async (_args, extra) => {
+        try {
+          const config = await getWatchConfig(wsOf(extra));
+          return json({ ...config, feeds: config.feeds.filter((f) => f.enabled) });
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
+    );
+
+    server.registerTool(
+      "upsert_watch_items",
+      {
+        description: "Dépose des items de veille (lot ≤ 200). status pool = corpus exploré (radar), proposed = file du matin (avec text_adapted + score). Idempotent sur (workspace, external_id) ; un item déjà décidé (validated/refused/expired) est ignoré et compté dans skipped — ne pas réessayer. Un statut hors pool/proposed rend { error }, ne pose rien.",
+        inputSchema: { items: z.array(watchItemSchema).max(200) },
+      },
+      async ({ items }, extra) => {
+        try {
+          return json(await upsertWatchItems(wsOf(extra), items.map((i) => ({
+            externalId: i.external_id, status: i.status as "pool" | "proposed", textSource: i.text_source,
+            url: i.url, author: i.author, lang: i.lang, postedAt: i.posted_at,
+            metrics: i.metrics, media: i.media, visual: i.visual,
+            textAdapted: i.text_adapted, score: i.score,
+          }))));
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
+    );
+
+    server.registerTool(
+      "list_watch_items",
+      {
+        description: "Items de veille du workspace, meilleur score d'abord puis dépôt le plus récent. status filtre (pool = corpus exploré, proposed = file du matin à traiter, validated/refused/expired = déjà décidés, immuables — ne pas re-proposer). since (ISO 8601) : items déposés/actualisés depuis. limit ≤ 500 (défaut 100). Chaque item porte external_id, text_source, text_adapted, score, status, refusal_reason/refusal_note si refusé, decided_at.",
+        inputSchema: {
+          status: z.enum(["pool", "proposed", "validated", "refused", "expired"]).optional(),
+          since: z.string().optional(),
+          limit: z.number().int().positive().max(500).optional(),
+        },
+      },
+      async ({ status, since, limit }, extra) => {
+        if (since !== undefined && Number.isNaN(Date.parse(since))) {
+          return json({ error: "since invalide (ISO 8601 attendu)" });
+        }
+        try {
+          return json(await listWatchItems(wsOf(extra), {
+            status, since: since ? new Date(since) : undefined, limit,
+          }));
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
+    );
+
+    server.registerTool(
+      "upsert_watch_feed",
+      {
+        description: "Crée ou met à jour un feed de veille suivi par le worker. kind account = compte à suivre, query = recherche/mot-clé. Upsert sur (workspace, kind, label) : rejouer avec le même kind+label met à jour params/enabled sans dupliquer. params est libre, interprété par le worker (cadence, langue, fenêtre…).",
+        inputSchema: {
+          kind: z.enum(["account", "query"]),
+          label: z.string().trim().min(1),
+          params: z.record(z.string(), z.unknown()).optional(),
+          enabled: z.boolean().optional(),
+        },
+      },
+      async ({ kind, label, params, enabled }, extra) => {
+        try {
+          return json(await upsertWatchFeed(wsOf(extra), { kind, label, params, enabled }));
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
+    );
+
+    server.registerTool(
+      "mark_feed_fetched",
+      {
+        description: "Marque un feed comme rafraîchi maintenant (last_fetched_at). À appeler par le worker juste après avoir traité ce feed (qu'il ait ou non trouvé de nouveaux items).",
+        inputSchema: { feed_id: z.string().uuid() },
+      },
+      async ({ feed_id }, extra) => {
+        try {
+          return json(await markFeedFetched(wsOf(extra), feed_id));
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
+    );
+
+    server.registerTool(
+      "update_watch_settings",
+      {
+        description: "Met à jour les réglages veille (champs omis = inchangés). channel_key doit exister dans les canaux du workspace (sinon { error }) — c'est le canal sur lequel une validation crée son contenu. publish_config : objet de chaînes (500 caractères par valeur, 20 clés max sur le résultat) mergé clé par clé avec l'existant si fourni — une clé fournie écrase ou ajoute, une clé absente du patch survit, une clé fournie à null est supprimée — la configuration de publication que get_watch_config rend en clair au worker.",
+        inputSchema: {
+          topics: z.array(z.string()).optional(),
+          style: z.string().optional(),
+          require_media: z.boolean().optional(),
+          channel_key: z.string().optional(),
+          publish_config: z.record(z.string(), z.unknown()).optional(),
+        },
+      },
+      async ({ topics, style, require_media, channel_key, publish_config }, extra) => {
+        try {
+          return json(await updateWatchSettings(wsOf(extra), {
+            topics, style, requireMedia: require_media,
+            channelKey: channel_key, publishConfig: publish_config,
+          }));
+        } catch (e) {
+          if (e instanceof Error) return json({ error: e.message });
+          throw e;
+        }
+      }
     );
   },
   {}

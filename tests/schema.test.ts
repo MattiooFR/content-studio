@@ -29,4 +29,11 @@ describe("schéma", () => {
     expect(names).toContain("content_comments");
     expect(names).toContain("comment_audio");
   });
+
+  it("les tables watch_items, watch_feeds et watch_settings existent (Task 1, veille)", async () => {
+    const names = await tableNames();
+    expect(names).toContain("watch_items");
+    expect(names).toContain("watch_feeds");
+    expect(names).toContain("watch_settings");
+  });
 });

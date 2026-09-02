@@ -1,19 +1,25 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { countsByBucket, BUCKET_LABELS, type Bucket } from "@/lib/stage";
 import { useWorkspaceItems } from "@/components/workspace/items-provider";
+import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 import { SubscriptionGauges } from "@/components/cockpit/subscription-gauges";
 import { ChatLauncherButton } from "@/components/cockpit/chat-drawer";
 import { SignOutButton } from "@/components/sign-out-button";
 import { cn } from "@/lib/utils";
 
 const BUCKETS: Bucket[] = ["todo", "writing", "published", "discarded"];
+const WATCH = [
+  { href: "/watch", label: "Propositions" },
+  { href: "/watch/radar", label: "Radar" },
+];
 const SETTINGS = [
   { href: "/settings/gauges", label: "Jauges" },
   { href: "/settings/tokens", label: "Tokens MCP" },
   { href: "/settings/workspace", label: "Lanes" },
+  { href: "/settings/watch", label: "Veille" },
 ];
 
 export function Sidebar({ email }: { email: string }) {
@@ -22,6 +28,32 @@ export function Sidebar({ email }: { email: string }) {
   const { items } = useWorkspaceItems();
   const counts = useMemo(() => countsByBucket(items), [items]);
   const activeBucket = pathname === "/" ? (params.get("bucket") ?? "todo") : null;
+
+  // Badge « Propositions » : nombre d'items `proposed` en attente. Fetch
+  // initial + rafraîchi sur watch.updated (dépôt du worker, décision prise
+  // dans un autre onglet) — même mécanique que items-provider pour les
+  // compteurs de buckets, mais résumé par un endpoint dédié plutôt que par
+  // la liste complète des items.
+  const [proposed, setProposed] = useState(0);
+
+  const loadProposed = useCallback(() => {
+    fetch("/api/watch/summary")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { proposed: number } | null) => {
+        if (data) setProposed(data.proposed);
+      })
+      .catch(() => {
+        /* badge discret : un échec de fetch n'affiche pas d'erreur, garde le dernier chiffre connu */
+      });
+  }, []);
+
+  useEffect(() => {
+    loadProposed();
+  }, [loadProposed]);
+
+  useWorkspaceEvents((e) => {
+    if (e.type === "watch.updated") loadProposed();
+  });
 
   // `< lg` : sidebar remplacée par une barre compacte (logo + bouton menu) qui
   // ouvre CETTE MÊME sidebar en overlay par-dessus le contenu — pas de second
@@ -87,6 +119,22 @@ export function Sidebar({ email }: { email: string }) {
                   activeBucket === b ? "bg-accent-soft font-medium text-accent" : "text-muted hover:bg-raised hover:text-ink"}`}>
                 {BUCKET_LABELS[b]}
                 <span className="text-[11px] tabular-nums text-faint">{counts[b]}</span>
+              </Link>
+            ))}
+          </nav>
+          <p className="px-4.5 pt-5 pb-1 text-[10px] font-semibold tracking-widest text-faint uppercase">Veille</p>
+          <nav className="grid gap-0.5 px-2">
+            {WATCH.map((l) => (
+              // Égalité STRICTE (pas startsWith) : "/watch" est un préfixe de
+              // "/watch/radar", startsWith allumerait les deux entrées à la fois.
+              <Link key={l.href} href={l.href} onClick={() => setMobileOpen(false)}
+                aria-current={pathname === l.href ? "page" : undefined}
+                className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-sm transition-colors duration-150 ${
+                  pathname === l.href ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}>
+                {l.label}
+                {l.href === "/watch" && (
+                  <span className="text-[11px] tabular-nums text-faint">{proposed}</span>
+                )}
               </Link>
             ))}
           </nav>
