@@ -42,6 +42,12 @@ describe("sources — cycle pending → extracted", () => {
     const failed = await markSourceFailed(ws.workspaceId, source.id, "extraction impossible : 404");
     expect(failed?.status).toBe("failed");
     expect(failed?.extractedMeta).toEqual({ error: "extraction impossible : 404" });
+
+    // Une source déjà extraite n'est JAMAIS rétrogradée (attach réussi puis
+    // complete_job raté : le texte attaché prime sur l'échec du job).
+    await attachExtraction(ws.workspaceId, source.id, { extractedText: "texte finalement attaché" });
+    expect(await markSourceFailed(ws.workspaceId, source.id, "trop tard")).toBeNull();
+    expect((await getSource(ws.workspaceId, source.id))?.status).toBe("extracted");
   });
 
   it("listSources filtre par ideaId et par status", async () => {
@@ -55,6 +61,12 @@ describe("sources — cycle pending → extracted", () => {
     expect((await listSources(ws.workspaceId, { ideaId: ideaA.id })).map((s) => s.id)).toEqual([s1.id]);
     expect((await listSources(ws.workspaceId, { status: "extracted" })).map((s) => s.id)).toEqual([s1.id]);
     expect((await listSources(ws.workspaceId, {})).length).toBe(2);
+
+    // Liste ALLÉGÉE : jamais le texte complet (un corpus peut peser des Mo),
+    // seulement sa longueur — le texte se lit via getSource, source par source.
+    const [light] = await listSources(ws.workspaceId, { ideaId: ideaA.id });
+    expect("extractedText" in light).toBe(false);
+    expect(light.extractedTextLength).toBe(1);
   });
 
   it("kind pdf/audio (upload binaire) refusés", async () => {
@@ -288,12 +300,16 @@ describe("sources — extraction : borne, titre, réessai, événements", () => 
   it("source.updated publié sur attachExtraction et markSourceFailed", async () => {
     const ws = await signUpTestUser();
     const idea = await createIdea(ws.workspaceId, { title: "Idée" });
-    const source = await addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "https://exemple.fr/e" });
+    // Deux sources distinctes : une source extraite ne peut plus être
+    // rétrogradée failed (garde markSourceFailed), donc l'événement failed
+    // se teste sur une source restée pending.
+    const sOk = await addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "https://exemple.fr/e" });
+    const sKo = await addSource(ws.workspaceId, { ideaId: idea.id, kind: "url", ref: "https://exemple.fr/f" });
     const events: WorkspaceEvent[] = [];
     const off = bus.subscribe(ws.workspaceId, (e) => events.push(e));
     try {
-      await attachExtraction(ws.workspaceId, source.id, { extractedText: "corps" });
-      await markSourceFailed(ws.workspaceId, source.id, "re-cassée");
+      await attachExtraction(ws.workspaceId, sOk.id, { extractedText: "corps" });
+      await markSourceFailed(ws.workspaceId, sKo.id, "cassée");
     } finally {
       off();
     }
@@ -302,6 +318,7 @@ describe("sources — extraction : borne, titre, réessai, événements", () => 
       (e): e is Extract<WorkspaceEvent, { type: "source.updated" }> => e.type === "source.updated"
     );
     expect(sourceEvents.map((e) => e.status)).toEqual(["extracted", "failed"]);
-    expect(sourceEvents[0]).toMatchObject({ sourceId: source.id, ideaId: idea.id });
+    expect(sourceEvents[0]).toMatchObject({ sourceId: sOk.id, ideaId: idea.id });
+    expect(sourceEvents[1]).toMatchObject({ sourceId: sKo.id, ideaId: idea.id });
   });
 });

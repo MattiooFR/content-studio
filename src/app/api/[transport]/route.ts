@@ -209,7 +209,7 @@ const handler = createMcpHandler(
     server.registerTool(
       "list_sources",
       {
-        description: "Liste les sources du workspace (url/video/text). Filtres optionnels : status ('pending' = extraction en attente), idea_id (les sources d'une idée).",
+        description: "Liste les sources du workspace (url/video/text), ALLÉGÉE : extracted_text remplacé par extractedTextLength — lire le texte complet d'une source via get_source. Filtres optionnels : status ('pending' = extraction en attente), idea_id (les sources d'une idée).",
         inputSchema: {
           status: z.enum(["pending", "extracted", "failed"]).optional(),
           idea_id: z.string().uuid().optional(),

@@ -104,6 +104,9 @@ style que les effets post-commit de jobs.ts : si elle échoue, la source existe 
 - `fail_job` / `cancel_job` / balayage « agent silencieux » sur un job `extract` →
   **effet post-commit** `markSourceFailed(source_id, message)` (ajouté à
   `applyFailureEffects`) : la source passe `failed`, la raison est visible dans l'UI.
+  **Évolution (polish post-merge)** : `markSourceFailed` ne rétrograde jamais une source
+  déjà `extracted` — le cas réel est un `attach_extraction` réussi suivi d'un
+  `complete_job` raté ; le texte attaché prime sur l'échec administratif du job.
 - Bouton **Réessayer** sur une source `failed` : `POST /api/sources/[id]/retry` →
   repasse la source en `pending` (reset `extracted_meta.error`) puis `retryJob` sur le
   dernier job extract failed de cette source s'il existe, sinon `createJob` neuf. Réponse
@@ -189,6 +192,11 @@ fasse à la main en dépannage.
   nouveau champ `text`), même chemin lib → job automatique. Schéma : `text` optionnel,
   requis si kind `text`.
 - `list_sources` : filtre `idea_id` optionnel (la lib le supporte déjà).
+  **Évolution (polish post-merge)** : la liste est ALLÉGÉE — `extracted_text` remplacé
+  par `extractedTextLength` (un corpus pèse jusqu'à 1,5 Mo par source) ; le texte complet
+  se lit via `get_source`. Même contrat côté HTTP (`GET /api/ideas/[id]/sources`), avec
+  une nouvelle route `GET /api/sources/[id]` que le panneau de la fiche idée charge au
+  clic.
 - `get_source` : inchangé — rend `extracted_text`, c'est ce que lit l'agent rédacteur
   avant un `write`.
 - `attach_extraction` : inchangé (borne 1,5 M appliquée par la lib).

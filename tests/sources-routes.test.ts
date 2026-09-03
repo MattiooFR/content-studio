@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { signUpTestUser, authedReq, req } from "./helpers";
 import { POST as addRoute } from "@/app/api/ideas/[id]/sources/route";
 import { POST as retryRoute } from "@/app/api/sources/[id]/retry/route";
+import { GET as getSourceRoute } from "@/app/api/sources/[id]/route";
 import { createIdea } from "@/lib/ideas";
 import { addSource, getSource } from "@/lib/sources";
 import { claimJob, failJob, listJobs } from "@/lib/jobs";
@@ -75,5 +76,25 @@ describe("POST /api/sources/[id]/retry", () => {
 
     const again = await retryRoute(await authedReq(ws, `/api/sources/${source.id}/retry`, { method: "POST" }), params(source.id));
     expect(again.status).toBe(409);
+  });
+});
+
+describe("GET /api/sources/[id]", () => {
+  it("rend la source complète (texte extrait) ; liste allégée côté idée ; 404 autre workspace ; 401 sans session", async () => {
+    const ws = await signUpTestUser();
+    const autre = await signUpTestUser();
+    const idea = await createIdea(ws.workspaceId, { title: "Idée" });
+    const source = await addSource(ws.workspaceId, {
+      ideaId: idea.id, kind: "text", text: "contenu complet du collage",
+    });
+
+    expect((await getSourceRoute(req(`/api/sources/${source.id}`), params(source.id))).status).toBe(401);
+    expect((await getSourceRoute(await authedReq(autre, `/api/sources/${source.id}`), params(source.id))).status).toBe(404);
+
+    const ok = await getSourceRoute(await authedReq(ws, `/api/sources/${source.id}`), params(source.id));
+    expect(ok.status).toBe(200);
+    const full = await ok.json();
+    expect(full.extractedText).toBe("contenu complet du collage");
+    expect(full.extractedMeta).toEqual({});
   });
 });

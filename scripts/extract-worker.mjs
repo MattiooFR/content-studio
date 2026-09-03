@@ -78,7 +78,8 @@ function assertPublicHttpUrl(raw) {
     host === "localhost" || host.endsWith(".local") || host === "0.0.0.0" ||
     /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
     /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host) ||
-    host === "[::1]" || host.startsWith("[fe80:") || host.startsWith("[fc") || host.startsWith("[fd");
+    host === "[::1]" || host === "[::]" ||
+    host.startsWith("[fe80:") || host.startsWith("[fc") || host.startsWith("[fd");
   if (prive) throw new Error(`hôte privé ou local refusé (${host})`);
   return u;
 }
@@ -111,7 +112,23 @@ async function extractUrl(ref) {
   if (!type.includes("html")) {
     throw new Error(`contenu non HTML (${type.split(";")[0] || "type inconnu"}) — déposer le texte à la main`);
   }
-  const { document } = parseHTML(await res.text());
+  // res.text() décoderait en UTF-8 aveugle : une page dont le charset n'est
+  // déclaré que dans <meta> (windows-1252, iso-8859-1…) sortirait avec les
+  // accents cassés. On lit les octets et on décode selon l'en-tête, sinon le
+  // <meta> des 2 premiers Ko, sinon UTF-8.
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let charset = /charset=["']?([\w-]+)/i.exec(type)?.[1];
+  if (!charset) {
+    const head = new TextDecoder("latin1").decode(bytes.subarray(0, 2048));
+    charset = /<meta[^>]+charset=["']?([\w-]+)/i.exec(head)?.[1];
+  }
+  let html;
+  try {
+    html = new TextDecoder(charset || "utf-8").decode(bytes);
+  } catch {
+    html = new TextDecoder("utf-8").decode(bytes); // charset exotique : repli UTF-8
+  }
+  const { document } = parseHTML(html);
   const article = new Readability(document).parse();
   if (!article || !article.textContent?.trim()) {
     throw new Error("Readability n'a rien extrait de cette page");

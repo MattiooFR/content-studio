@@ -15,9 +15,12 @@ import type { WorkspaceItemRef } from "@/lib/workspace-url";
 type Idea = { id: string; title: string; notes: string; status: string };
 type Content = { id: string; channelId: string; status: string; type: string };
 type Channel = { id: string; key: string; name: string };
+// Ligne ALLÉGÉE de la liste (extracted_text exclu côté serveur — corpus
+// potentiellement lourd) : le texte complet se charge au clic, via
+// GET /api/sources/[id].
 type Source = {
   id: string; kind: string; ref: string; title: string;
-  extractedText: string; extractedMeta: Record<string, unknown>; status: string;
+  extractedTextLength: number; extractedMeta: Record<string, unknown>; status: string;
 };
 
 export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem: (ref: WorkspaceItemRef) => void }) {
@@ -30,6 +33,9 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
   const [sourceText, setSourceText] = useState("");
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [openSourceId, setOpenSourceId] = useState<string | null>(null);
+  // Texte extrait chargé au clic (la liste est allégée), en cache par source
+  // avec son compte de mots précalculé — invalidé quand la source bouge (SSE).
+  const [sourceTexts, setSourceTexts] = useState<Record<string, { text: string; words: number }>>({});
   const jobs = useJobs("idea", ideaId);
   const writeJob = jobs.latest("write");
   const writeActive = writeJob?.status === "queued" || writeJob?.status === "running";
@@ -63,9 +69,16 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
     fetch("/api/channels").then((r) => { if (r.ok) r.json().then(setChannels); });
   }, [load]);
 
-  // live : une extraction de source de CETTE idée progresse ailleurs (worker, autre onglet)
+  // live : une extraction de source de CETTE idée progresse ailleurs (worker,
+  // autre onglet) — le cache du texte de cette source est invalidé au passage
   useWorkspaceEvents((e) => {
-    if (e.type === "source.updated" && e.ideaId === ideaId) load();
+    if (e.type === "source.updated" && e.ideaId === ideaId) {
+      setSourceTexts((m) => {
+        const { [e.sourceId]: _stale, ...rest } = m;
+        return rest;
+      });
+      load();
+    }
   });
 
   async function decline(channelKey: string) {
@@ -110,6 +123,23 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
     setSourceError(null);
     setSourceUrl(""); setSourceText("");
     load();
+  }
+
+  async function toggleSource(s: Source) {
+    if (openSourceId === s.id) {
+      setOpenSourceId(null);
+      return;
+    }
+    setOpenSourceId(s.id);
+    if (sourceTexts[s.id]) return; // déjà en cache
+    const res = await fetch(`/api/sources/${s.id}`);
+    if (!res.ok) return; // le panneau reste sur « Chargement… », un re-clic retente
+    const full = await res.json();
+    const text: string = full.extractedText ?? "";
+    setSourceTexts((m) => ({
+      ...m,
+      [s.id]: { text, words: text.split(/\s+/).filter(Boolean).length },
+    }));
   }
 
   async function retrySource(id: string) {
@@ -185,10 +215,13 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
                 <li key={s.id}>
                   <button
                     type="button"
-                    onClick={() =>
-                      extractable && setOpenSourceId(openSourceId === s.id ? null : s.id)
+                    onClick={() => toggleSource(s)}
+                    disabled={!extractable}
+                    aria-expanded={extractable ? openSourceId === s.id : undefined}
+                    className={
+                      "flex w-full items-center justify-between gap-3 rounded-lg border border-line bg-raised/40 p-3 text-left transition-colors duration-150" +
+                      (extractable ? " cursor-pointer hover:border-line-strong" : " cursor-default")
                     }
-                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-line bg-raised/40 p-3 text-left transition-colors duration-150 hover:border-line-strong"
                   >
                     <span className="shrink-0 text-[10px] tracking-widest text-faint uppercase">
                       {s.kind === "video" ? "vidéo" : s.kind === "url" ? "article" : "texte"}
@@ -214,12 +247,18 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
                   )}
                   {extractable && openSourceId === s.id && (
                     <div className="mt-2 rounded-lg border border-line bg-bg">
-                      <p className="border-b border-line px-3 py-1.5 text-[11px] text-faint tabular-nums">
-                        {s.extractedText.split(/\s+/).filter(Boolean).length} mots
-                      </p>
-                      <pre className="max-h-72 overflow-auto p-3 text-xs leading-5 whitespace-pre-wrap">
-                        {s.extractedText}
-                      </pre>
+                      {sourceTexts[s.id] ? (
+                        <>
+                          <p className="border-b border-line px-3 py-1.5 text-[11px] text-faint tabular-nums">
+                            {sourceTexts[s.id].words} mots
+                          </p>
+                          <pre className="max-h-72 overflow-auto p-3 text-xs leading-5 whitespace-pre-wrap">
+                            {sourceTexts[s.id].text}
+                          </pre>
+                        </>
+                      ) : (
+                        <p className="p-3 text-xs text-muted">Chargement du texte…</p>
+                      )}
                     </div>
                   )}
                 </li>

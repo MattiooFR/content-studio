@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sources, ideas } from "@/lib/db/schema";
 import { youtubeVideoId } from "@/lib/youtube";
@@ -134,6 +134,11 @@ export async function enqueueExtractJob(
   }
 }
 
+// Liste ALLÉGÉE : extracted_text exclu (un corpus pèse jusqu'à 1,5 Mo par
+// source, et la fiche idée refetch à chaque source.updated) — remplacé par sa
+// longueur. Le texte complet se lit par getSource, source par source.
+const { extractedText: _extractedTextColumn, ...lightColumns } = getTableColumns(sources);
+
 export async function listSources(
   workspaceId: string,
   filter: { ideaId?: string; status?: SourceStatus }
@@ -141,7 +146,10 @@ export async function listSources(
   const conditions = [eq(sources.workspaceId, workspaceId)];
   if (filter.ideaId !== undefined) conditions.push(eq(sources.ideaId, filter.ideaId));
   if (filter.status !== undefined) conditions.push(eq(sources.status, filter.status));
-  return db.select().from(sources)
+  return db.select({
+    ...lightColumns,
+    extractedTextLength: sql<number>`length(${sources.extractedText})`,
+  }).from(sources)
     .where(and(...conditions))
     .orderBy(desc(sources.createdAt));
 }
@@ -187,7 +195,13 @@ export async function attachExtraction(
 export async function markSourceFailed(workspaceId: string, sourceId: string, reason: string) {
   const [row] = await db.update(sources)
     .set({ status: "failed", extractedMeta: { error: reason }, updatedAt: new Date() })
-    .where(and(eq(sources.id, sourceId), eq(sources.workspaceId, workspaceId)))
+    .where(and(
+      eq(sources.id, sourceId), eq(sources.workspaceId, workspaceId),
+      // Un échec ne rétrograde JAMAIS une source déjà extraite : le cas réel
+      // est un attach_extraction réussi suivi d'un complete_job raté (réseau,
+      // job balayé) — le texte attaché prime sur l'échec administratif du job.
+      ne(sources.status, "extracted"),
+    ))
     .returning();
   if (row) bus.publish(workspaceId, { type: "source.updated", sourceId: row.id, ideaId: row.ideaId, status: row.status });
   return row ?? null;

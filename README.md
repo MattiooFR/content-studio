@@ -144,8 +144,10 @@ CS_MCP_URL=http://localhost:3003/api/mcp CS_MCP_TOKEN=cs_… \
 ```
 
 Prérequis sur la machine du worker : `yt-dlp` et `mlx_whisper` dans le PATH
-(Apple Silicon pour mlx). Un agent MCP peut aussi consommer ces jobs à la
-main en suivant le tableau ci-dessus.
+(Apple Silicon pour mlx), et un `npm install` AVEC les devDependencies
+(jamais `--omit=dev` : le script s'appuie sur `@mozilla/readability`,
+`linkedom` et le SDK MCP installés en dev). Un agent MCP peut aussi consommer
+ces jobs à la main en suivant le tableau ci-dessus.
 
 ### Publications
 
