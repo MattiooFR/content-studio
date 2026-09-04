@@ -3,14 +3,14 @@ import { db } from "@/lib/db";
 import { commentAudio, contentComments, contents } from "@/lib/db/schema";
 import { bus } from "@/lib/events";
 import { createJob, type Job } from "@/lib/jobs";
+import { MAX_AUDIO_BYTES, isSupportedAudioMime } from "@/lib/audio";
 
 export type Comment = typeof contentComments.$inferSelect;
 export const MAX_COMMENT_BODY_LENGTH = 10000;
 export const MAX_QUOTE_LENGTH = 2000;
 export const MAX_CONTEXT_LENGTH = 200;
 export const MAX_SECTION_LENGTH = 300;
-export const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
-export const AUDIO_MIMES = ["audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/ogg", "audio/wav", "audio/mpeg"];
+export { MAX_AUDIO_BYTES, AUDIO_MIMES } from "@/lib/audio";
 
 type Anchor = { quote?: string; prefix?: string; suffix?: string; section?: string };
 
@@ -73,8 +73,7 @@ export async function createVoiceComment(workspaceId: string, input: Anchor & {
 }): Promise<{ comment: Comment; job: Job }> {
   if (!input.audio.length) throw new Error("audio vide");
   if (input.audio.length > MAX_AUDIO_BYTES) throw new Error(`audio trop gros (max ${MAX_AUDIO_BYTES} octets)`);
-  const mime = input.mime.split(";")[0].trim();
-  if (!AUDIO_MIMES.some((m) => m.split(";")[0] === mime)) throw new Error(`mime audio non supporté : ${input.mime}`);
+  if (!isSupportedAudioMime(input.mime)) throw new Error(`mime audio non supporté : ${input.mime}`);
   checkAnchor(input);
   await assertContent(workspaceId, input.contentId);
   const comment = await db.transaction(async (tx) => {

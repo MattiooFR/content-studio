@@ -1,40 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireWorkspace, TenantError } from "@/lib/tenant";
-import { createVoiceComment, MAX_AUDIO_BYTES, AUDIO_MIMES } from "@/lib/comments";
-
-/**
- * Lit le corps par morceaux et coupe DÈS que le cumul dépasse `max`, sans
- * jamais tamponner plus que max + un chunk : un upload chunké/streamé sans
- * (ou avec un) content-length mensonger ne doit pas forcer à bufferiser tout
- * le flux avant de le rejeter (mémoire non bornée sinon). null = dépassement
- * (→ 413 côté appelant) ; corps absent = vide (→ "audio vide" côté lib, 400).
- */
-async function readBodyBounded(req: NextRequest, max: number): Promise<Buffer | null> {
-  const body = req.body;
-  if (!body) return Buffer.alloc(0);
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    total += value.length;
-    if (total > max) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
+import { createVoiceComment } from "@/lib/comments";
+import { MAX_AUDIO_BYTES, isSupportedAudioMime, readBodyBounded } from "@/lib/audio";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { workspaceId, userId } = await requireWorkspace(req.headers);
     const { id } = await params;
     const mime = (req.headers.get("content-type") ?? "").trim();
-    if (!AUDIO_MIMES.some((m) => m.split(";")[0] === mime.split(";")[0]))
+    if (!isSupportedAudioMime(mime))
       return NextResponse.json({ error: "type audio non supporté" }, { status: 415 });
     const declared = Number(req.headers.get("content-length") ?? 0);
     if (declared > MAX_AUDIO_BYTES) return NextResponse.json({ error: "audio trop gros (16 Mo max)" }, { status: 413 });
