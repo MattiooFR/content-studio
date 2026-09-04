@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useRecorder } from "@/components/review/use-recorder";
+import { useRecorder } from "@/hooks/use-recorder";
 import type { CommentRow } from "@/components/review/use-comments";
 
 /**

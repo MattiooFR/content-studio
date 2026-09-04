@@ -5,7 +5,7 @@ export type Recording = { blob: Blob; mime: string };
 
 // Ordre de préférence : opus dans webm (Chrome/Firefox), sinon mp4 (Safari),
 // sinon ogg. `undefined` = on laisse le navigateur choisir. Tous ces types
-// sont acceptés par la route audio (AUDIO_MIMES, src/lib/comments.ts), qui
+// sont acceptés par la route audio (AUDIO_MIMES, src/lib/audio.ts), qui
 // compare sur le type sans paramètres (`audio/webm;codecs=opus` → `audio/webm`).
 const CANDIDATES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
 export const MAX_RECORD_MS = 3 * 60_000;
