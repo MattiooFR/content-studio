@@ -1,7 +1,7 @@
 # Vague « dictée partout » — spécification de conception
 
 **Date** : 2026-09-04
-**Statut** : validé (design), plan à venir
+**Statut** : implémenté (plan docs/plans/2026-09-04-dictation.md)
 **Périmètre** : pouvoir dicter à la place de taper dans TOUTES les zones de saisie de
 content-studio (champs, zones de texte, éditeurs tiptap), avec transcription 100 %
 locale par mlx-whisper sur le Mac, en asynchrone : on dicte, on continue à travailler,
@@ -106,12 +106,15 @@ POST /api/dictations (audio) ──▶ dictations(pending) + dictation_audio + j
 |---|---|---|
 | `POST /api/dictations?field_key=` | session | corps = audio brut (`content-type` = mime). 201 `{ id, status }`. 400/413/415 comme la route audio des commentaires. |
 | `GET /api/dictations?status=&limit=` | session | tiroir : 50 dernières par défaut, plus récentes d'abord, sans l'audio. |
-| `GET /api/dictations?field_key=&pending=1` | session | au montage d'un champ : ses dictées `pending` + `done` non consommées. |
+| `GET /api/dictations?field_key=&open=1` | session | au montage d'un champ : ses dictées `pending` + `done` non consommées. |
 | `POST /api/dictations/[id]/retry` | session | 200 dictée, 409 si non `failed`, 404. |
 | `POST /api/dictations/[id]/consume` | session | 200 dictée ; idempotent. |
 | `DELETE /api/dictations/[id]` | session | 204 ; 404. |
 | `GET /api/jobs/[id]/audio` | Bearer MCP | **étendue** : sert l'audio d'un job transcribe ciblant un commentaire (existant) OU une dictée. |
 | `GET /api/events` | session **ou Bearer MCP** | **étendue** : `resolveMcpToken` si l'en-tête Authorization est présent — le worker s'abonne au flux du workspace du token. |
+
+**Déviation assumée (plan)** : le paramètre de reprise s'appelle `open=1` (pending + done
+non consommée), pas `pending=1`.
 
 ---
 
@@ -185,6 +188,9 @@ Micro refusé/non supporté → bouton absent (pas de bouton mort). Titre d'acce
 `editor.chain().focus().insertContent(text).run()` au curseur ; `fieldKey =
 content:<id>:body` (éditeur) et `content:<id>:review` (relecture).
 
+**Déviation assumée (plan)** : pas de micro sur l'éditeur de relecture (lecture seule) —
+les commentaires se dictent via la `Textarea` du popover (§5.5).
+
 ### 5.5 Call sites existants
 
 - Chat (`chat-drawer.tsx`) : le `<textarea>` brut passe sur la primitive `Textarea`
@@ -203,6 +209,9 @@ Entrée dans la barre latérale (section principale, sous les vues), badge = nom
 (pastille `StatusBadge` : `pending`/`done`/`failed`, teintes existantes), extrait du
 texte (120 caractères), « insérée » si `consumed_at`, actions **Copier** (presse-papiers),
 **Réessayer** (failed), **Supprimer**. Live via `dictation.updated`.
+
+**Déviation assumée (plan)** : le tiroir est une page `/dictations` + entrée de barre
+latérale avec badge, pas un panneau tiroir superposé.
 
 ---
 
