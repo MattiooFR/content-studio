@@ -244,7 +244,7 @@ export const agentJobs = pgTable("agent_jobs", {
   workspaceId: uuid("workspace_id").notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
   kind: text("kind").notNull(),
-  targetType: text("target_type", { enum: ["idea", "content", "comment", "source"] }).notNull(),
+  targetType: text("target_type", { enum: ["idea", "content", "comment", "source", "dictation"] }).notNull(),
   targetId: uuid("target_id").notNull(),
   payload: jsonb("payload").notNull().default({}),
   status: text("status", { enum: ["queued", "running", "done", "failed", "cancelled"] })
@@ -405,4 +405,38 @@ export const watchSettings = pgTable("watch_settings", {
   channelKey: text("channel_key"),
   publishConfig: jsonb("publish_config").notNull().default({}),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ---- dictées (vague « dictée partout ») -----------------------------------
+// Une dictée = un audio déposé depuis n'importe quel champ de l'UI, transcrit
+// par le worker local (job transcribe, cible dictation). field_key identifie
+// le champ d'origine (opaque pour le serveur) ; consumed_at = le champ a
+// inséré le texte. L'audio est purgé dès que la transcription réussit, gardé
+// tant qu'un réessai est possible.
+export const dictations = pgTable("dictations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  status: text("status", { enum: ["pending", "done", "failed"] }).notNull().default("pending"),
+  text: text("text").notNull().default(""),
+  error: text("error"),
+  fieldKey: text("field_key").notNull().default(""),
+  consumedAt: timestamp("consumed_at"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  index("dictations_ws_status").on(t.workspaceId, t.status),
+  index("dictations_ws_field").on(t.workspaceId, t.fieldKey),
+]);
+
+// Même pattern que comment_audio : pas de workspace_id, cloisonné par la
+// dictée parente — toute lecture passe par dictations.workspace_id d'abord.
+export const dictationAudio = pgTable("dictation_audio", {
+  dictationId: uuid("dictation_id").primaryKey()
+    .references(() => dictations.id, { onDelete: "cascade" }),
+  mime: text("mime").notNull(),
+  bytes: customType<{ data: Buffer; driverData: Buffer }>({ dataType() { return "bytea"; } })("bytes").notNull(),
+  size: integer("size").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });

@@ -12,13 +12,16 @@ export type WorkspaceEvent =
   | { type: "idea.created"; ideaId: string }
   | { type: "lane.message"; laneId: string; event: LaneRunEvent }
   // vague « cockpit agent » : chaque transition d'un job (création incluse)
-  | { type: "job.updated"; jobId: string; kind: string; targetType: "idea" | "content" | "comment" | "source"; targetId: string; status: string }
+  | { type: "job.updated"; jobId: string; kind: string; targetType: "idea" | "content" | "comment" | "source" | "dictation"; targetId: string; status: string }
   // vague « sources & extraction » : transitions d'une source (pending → extracted/failed, réessai)
   | { type: "source.updated"; sourceId: string; ideaId: string; status: string }
   // création, mise à jour, ou changement de transcription d'un commentaire
   | { type: "comment.updated"; contentId: string; commentId: string; status: string; transcription: string }
   // module veille : dépôt (itemId absent = lot, l'UI refetch) ou décision
-  | { type: "watch.updated"; itemId?: string; status?: string };
+  | { type: "watch.updated"; itemId?: string; status?: string }
+  // vague « dictée partout » : transitions d'une dictée (pending → done/failed,
+  // réessai, consommation par le champ, suppression → "deleted")
+  | { type: "dictation.updated"; dictationId: string; fieldKey: string; status: string };
 
 type Handler = (e: WorkspaceEvent) => void;
 

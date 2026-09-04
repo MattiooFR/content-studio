@@ -1,10 +1,10 @@
 import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { agentJobs, contentComments, contents, ideas, sources } from "@/lib/db/schema";
+import { agentJobs, contentComments, contents, dictations, ideas, sources } from "@/lib/db/schema";
 import { bus } from "@/lib/events";
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
-export type JobTargetType = "idea" | "content" | "comment" | "source";
+export type JobTargetType = "idea" | "content" | "comment" | "source" | "dictation";
 export type Job = typeof agentJobs.$inferSelect;
 
 export const SILENT_AFTER_MS = 10 * 60_000;
@@ -50,6 +50,10 @@ async function assertTarget(workspaceId: string, targetType: JobTargetType, targ
   } else if (targetType === "source") {
     const [row] = await db.select({ id: sources.id }).from(sources)
       .where(and(eq(sources.id, targetId), eq(sources.workspaceId, workspaceId)));
+    if (row) return;
+  } else if (targetType === "dictation") {
+    const [row] = await db.select({ id: dictations.id }).from(dictations)
+      .where(and(eq(dictations.id, targetId), eq(dictations.workspaceId, workspaceId)));
     if (row) return;
   }
   throw new Error("cible introuvable dans ce workspace");
@@ -163,6 +167,7 @@ export async function listJobs(workspaceId: string, filter: {
       when agent_jobs.target_type = 'idea' then (select i.title from ideas i where i.id = agent_jobs.target_id)
       when agent_jobs.target_type = 'content' then (select i2.title from contents c join ideas i2 on i2.id = c.idea_id where c.id = agent_jobs.target_id)
       when agent_jobs.target_type = 'source' then (select coalesce(nullif(s.title, ''), s.ref) from sources s where s.id = agent_jobs.target_id)
+      when agent_jobs.target_type = 'dictation' then (select 'Dictée ' || d.field_key from dictations d where d.id = agent_jobs.target_id)
       else null end)`,
   }).from(agentJobs)
     .where(and(...conds))
@@ -206,12 +211,12 @@ async function finish(workspaceId: string, id: string, set: Partial<typeof agent
 
 export async function completeJob(workspaceId: string, id: string, result: Record<string, unknown> = {}): Promise<Job | null> {
   if (jsonBytes(result) > MAX_JOB_JSON_BYTES) throw new Error(`result trop gros (max ${MAX_JOB_JSON_BYTES} octets)`);
-  // Un transcribe sans result.text ne doit jamais passer done avec un
-  // commentaire qui resterait pending pour toujours : vérifié AVANT finish,
-  // pour laisser le job running (retry possible) plutôt que de committer une
-  // transition qu'on ne pourrait pas honorer côté commentaire.
+  // Un transcribe (commentaire OU dictée) sans result.text ne doit jamais
+  // passer done avec une cible qui resterait pending pour toujours : vérifié
+  // AVANT finish, le job reste running (retry possible).
   const current = await getJob(workspaceId, id);
-  if (current?.kind === "transcribe" && current.targetType === "comment" && typeof result.text !== "string")
+  if (current?.kind === "transcribe" && (current.targetType === "comment" || current.targetType === "dictation")
+    && typeof result.text !== "string")
     throw new Error("result.text requis pour un job transcribe");
   // Même famille de garde que transcribe : un extract ne passe jamais done
   // avec une source restée pending — le job reste running, le worker corrige
@@ -233,6 +238,15 @@ export async function completeJob(workspaceId: string, id: string, result: Recor
       await applyTranscription(workspaceId, row.targetId, result.text as string);
     } catch (e) {
       console.error("applyTranscription a échoué après completeJob", e);
+    }
+  }
+  if (row && row.kind === "transcribe" && row.targetType === "dictation") {
+    try {
+      // Import dynamique : dictations.ts importe jobs.ts (createJob).
+      const { applyDictation } = await import("@/lib/dictations");
+      await applyDictation(workspaceId, row.targetId, result.text as string);
+    } catch (e) {
+      console.error("applyDictation a échoué après completeJob", e);
     }
   }
   return row;
@@ -271,6 +285,10 @@ async function applyFailureEffects(job: Job, message: string) {
     // Même raison d'import dynamique : sources.ts importe jobs.ts.
     const { markSourceFailed } = await import("@/lib/sources");
     await markSourceFailed(job.workspaceId, job.targetId, message);
+  }
+  if (job.kind === "transcribe" && job.targetType === "dictation") {
+    const { failDictation } = await import("@/lib/dictations");
+    await failDictation(job.workspaceId, job.targetId, message);
   }
 }
 
