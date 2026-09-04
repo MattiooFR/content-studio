@@ -149,7 +149,8 @@ base : il parle exclusivement MCP, comme n'importe quel worker.
 - **kind `video`** : `yt-dlp -x --audio-format m4a -o <tmp>` (répertoire temporaire
   dédié, nettoyé en `finally`) → `mlx_whisper --model mlx-community/whisper-large-v3-turbo`
   → texte brut ; meta `{title (yt-dlp), duration_s, model: "whisper-large-v3-turbo",
-  tool: <identifiant littéral conservé tel quel dans le code, non renommé par Task 4>}`.
+  tool: "extract-worker/yt-dlp+mlx-whisper"}` (identifiant historique conservé tel quel —
+  Task 4 renomme le script en `worker.mjs` mais ne touche pas à cette valeur littérale).
   Binaire manquant (yt-dlp ou mlx_whisper introuvable) →
   `fail_job` explicite, jamais un crash de la boucle.
 - **Déviation assumée (revue finale, durcissement sécurité)** : l'appel `yt-dlp` insère

@@ -206,12 +206,13 @@ function ensurePython() {
   if (py) return;
   stopping = false;
   log("chargement du modèle mlx-whisper…");
-  py = spawn(PYTHON, [join(HERE, "transcribe-worker.py")], {
+  const child = spawn(PYTHON, [join(HERE, "transcribe-worker.py")], {
     stdio: ["pipe", "pipe", "inherit"],
     env: { ...process.env, CS_WHISPER_MODEL: WHISPER_MODEL },
   });
+  py = child;
   let buf = "";
-  py.stdout.on("data", (d) => {
+  child.stdout.on("data", (d) => {
     buf += d.toString();
     let i;
     while ((i = buf.indexOf("\n")) >= 0) {
@@ -226,22 +227,33 @@ function ensurePython() {
       if (!waiting.length) armIdle();
     }
   });
-  py.on("error", (e) => {
+  // Remise à zéro partagée par error/exit/close : idempotente (si un nouveau child a déjà
+  // pris le relais, `py !== child` et on ne touche à rien) — un spawn ENOENT n'émet parfois
+  // QUE 'error' (jamais 'exit'), sinon ensurePython() ne relancerait plus jamais rien.
+  const reset = (message) => {
+    if (py !== child) return;
+    py = null; pyReady = false;
+    waiting.forEach((r) => r({ error: message })); waiting = [];
+  };
+  child.on("error", (e) => {
     // ENOENT = python du venv introuvable : les dictées en attente échouent proprement
     const message = e?.code === "ENOENT" ? `python introuvable : ${PYTHON} (CS_PYTHON)` : e.message;
-    waiting.forEach((r) => r({ error: message })); waiting = [];
+    reset(message);
   });
-  py.on("exit", (code) => {
-    const expected = stopping;
-    py = null; pyReady = false;
-    waiting.forEach((r) => r({ error: "transcripteur arrêté" })); waiting = [];
-    if (!expected) log(`transcripteur arrêté (code ${code}) — il repartira à la prochaine dictée`);
+  child.on("exit", (code) => {
+    if (!stopping) log(`transcripteur arrêté (code ${code}) — il repartira à la prochaine dictée`);
+    reset("transcripteur arrêté");
   });
+  // Belt-and-braces : rattrape les cas où 'exit' ne serait jamais émis après un 'error' de spawn.
+  child.on("close", () => reset("transcripteur arrêté"));
 }
 
 function transcribeWav(wav) {
   ensurePython();
   clearTimeout(idleTimer);
+  if (!py || py.stdin.destroyed || !py.stdin.writable) {
+    return Promise.resolve({ error: "transcripteur indisponible (python introuvable ou arrêté)" });
+  }
   return new Promise((resolve) => { waiting.push(resolve); py.stdin.write(wav + "\n"); });
 }
 
@@ -360,6 +372,8 @@ async function watchEvents() {
 await connect();
 log(`${WORKER_LABEL} branché sur ${MCP_URL}${ONCE ? " (--once)" : ""}`);
 if (!ONCE) watchEvents();
+// Arrêt propre : SIGINT/SIGTERM ferment proprement le transcripteur avant de sortir.
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { if (py) { stopping = true; py.stdin.end(); } process.exit(0); });
 do {
   try {
     await tick();
