@@ -51,8 +51,29 @@ export function Sidebar({ email }: { email: string }) {
     loadProposed();
   }, [loadProposed]);
 
+  // Badge « Dictées » : nombre de dictées `pending` (Task 8) — même mécanique
+  // que le badge « Propositions » ci-dessus, fusionné dans le même
+  // `useWorkspaceEvents` (un seul flux SSE partagé, cf. hook).
+  const [pendingDictations, setPendingDictations] = useState(0);
+
+  const loadDictations = useCallback(() => {
+    fetch("/api/dictations?status=pending&limit=200")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((rows: unknown[] | null) => {
+        if (rows) setPendingDictations(rows.length);
+      })
+      .catch(() => {
+        /* badge discret */
+      });
+  }, []);
+
+  useEffect(() => {
+    loadDictations();
+  }, [loadDictations]);
+
   useWorkspaceEvents((e) => {
     if (e.type === "watch.updated") loadProposed();
+    if (e.type === "dictation.updated") loadDictations();
   });
 
   // `< lg` : sidebar remplacée par une barre compacte (logo + bouton menu) qui
@@ -121,6 +142,17 @@ export function Sidebar({ email }: { email: string }) {
                 <span className="text-[11px] tabular-nums text-faint">{counts[b]}</span>
               </Link>
             ))}
+          </nav>
+          <nav className="grid gap-0.5 px-2 pt-1">
+            <Link href="/dictations" onClick={() => setMobileOpen(false)}
+              aria-current={pathname === "/dictations" ? "page" : undefined}
+              className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-sm transition-colors duration-150 ${
+                pathname === "/dictations" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}>
+              Dictées
+              {pendingDictations > 0 && (
+                <span className="rounded-full bg-accent-soft px-1.5 text-[11px] font-medium text-accent tabular-nums">{pendingDictations}</span>
+              )}
+            </Link>
           </nav>
           <p className="px-4.5 pt-5 pb-1 text-[10px] font-semibold tracking-widest text-faint uppercase">Veille</p>
           <nav className="grid gap-0.5 px-2">

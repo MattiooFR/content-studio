@@ -57,7 +57,7 @@ export function StatusBadge({
   value,
   className,
 }: {
-  kind: "idea" | "content" | "source" | "gauge" | "job" | "comment";
+  kind: "idea" | "content" | "source" | "gauge" | "job" | "comment" | "dictation";
   value: string;
   className?: string;
 }) {
