@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
  * bouton mort).
  */
 export function DictateButton({ fieldKey, onText, recover, className }: {
-  fieldKey: string; onText: (text: string) => void; recover?: boolean; className?: string;
+  fieldKey: string; onText: (text: string) => boolean; recover?: boolean; className?: string;
 }) {
   const { supported, recording, pending, error, toggle } = useDictation({ fieldKey, onText, recover });
   if (!supported) return null;

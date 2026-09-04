@@ -37,6 +37,7 @@ const ONCE = process.argv.includes("--once");
 const POLL_MS = 15_000;
 const HEARTBEAT_MS = 60_000; // le serveur bascule un running en failed après 10 min de silence
 const MODEL_IDLE_MS = 15 * 60_000; // modèle déchargé après 15 min sans dictée (~0,9 Go de RAM)
+const PY_TIMEOUT_MS = 10 * 60_000; // borne dure autour d'un appel transcribeWav — généreux pour le tout premier téléchargement du modèle
 const KINDS = new Set(["extract", "transcribe"]);
 const WORKER_LABEL = `worker@${hostname()}`;
 
@@ -198,7 +199,16 @@ let py = null, pyReady = false, waiting = [], idleTimer = null, stopping = false
 function armIdle() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
-    if (py && !waiting.length) { log("modèle déchargé (inactivité)"); stopping = true; py.stdin.end(); }
+    if (py && !waiting.length) {
+      log("modèle déchargé (inactivité)");
+      stopping = true;
+      py.stdin.end();
+      // Respawn immédiat autorisé : la garde `py !== child` de `reset` rend
+      // inoffensif l'`exit` qui arrivera plus tard pour CE process — une
+      // dictée qui arrive dans la fenêtre (avant que le process ait fini de
+      // sortir) relance ensurePython() au lieu d'échouer sur un stdin fermé.
+      py = null; pyReady = false;
+    }
   }, MODEL_IDLE_MS);
 }
 
@@ -248,13 +258,29 @@ function ensurePython() {
   child.on("close", () => reset("transcripteur arrêté"));
 }
 
+// Sans borne, un Python qui pend (téléchargement du modèle calé, GPU figé)
+// bloquerait processJob pour toujours — le heartbeat maintient le job
+// running, rien ne le fait jamais échouer. PY_TIMEOUT_MS borne l'attente ;
+// à expiration on tue le transcripteur (→ exit → reset() résout les
+// attentes restantes en { error }) et on rend une erreur explicite pour
+// CET appel, nettoyée du minuteur dès que la promesse se résout (normalement
+// ou par timeout) pour ne rien laisser tourner en trop.
 function transcribeWav(wav) {
   ensurePython();
   clearTimeout(idleTimer);
   if (!py || py.stdin.destroyed || !py.stdin.writable) {
     return Promise.resolve({ error: "transcripteur indisponible (python introuvable ou arrêté)" });
   }
-  return new Promise((resolve) => { waiting.push(resolve); py.stdin.write(wav + "\n"); });
+  const result = new Promise((resolve) => { waiting.push(resolve); py.stdin.write(wav + "\n"); });
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      log(`transcription > ${Math.round(PY_TIMEOUT_MS / 60_000)} min — transcripteur relancé`);
+      if (py) py.kill();
+      resolve({ error: `transcription trop longue (> ${Math.round(PY_TIMEOUT_MS / 60_000)} min) — transcripteur relancé` });
+    }, PY_TIMEOUT_MS);
+  });
+  return Promise.race([result, timeout]).then((r) => { clearTimeout(timer); return r; });
 }
 
 async function transcribeJob(job) {

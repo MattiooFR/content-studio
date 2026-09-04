@@ -32,11 +32,14 @@ export async function GET(req: NextRequest) {
     const { workspaceId } = await requireWorkspace(req.headers);
     const sp = req.nextUrl.searchParams;
     const status = sp.get("status");
+    // ?limit=abc → NaN → .limit(NaN) → 500 côté Postgres ; on borne comme
+    // /api/watch/items (Number.isFinite), sinon undefined = défaut (50).
+    const limitRaw = sp.get("limit") !== null ? Number(sp.get("limit")) : NaN;
     const rows = await listDictations(workspaceId, {
       status: status === "pending" || status === "done" || status === "failed" ? status : undefined,
       fieldKey: sp.get("field_key") ?? undefined,
       open: sp.get("open") === "1",
-      limit: sp.get("limit") ? Number(sp.get("limit")) : undefined,
+      limit: Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : undefined,
     });
     return NextResponse.json(rows);
   } catch (e) {

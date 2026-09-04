@@ -664,6 +664,7 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
                   }}
                   rows={2}
                   dictation={{ fieldKey: `chat:${activeLaneId}` }}
+                  wrapperClassName="flex-1"
                   className="min-h-16 resize-none border-line bg-raised text-sm text-ink placeholder:text-faint focus-visible:border-accent disabled:opacity-60"
                 />
                 <Button

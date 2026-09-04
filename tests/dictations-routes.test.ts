@@ -56,8 +56,13 @@ describe("GET/DELETE /api/dictations, retry, consume", () => {
 
     const consumed = await consumeRoute(await authedReq(ws, `/api/dictations/${ready.id}/consume`, { method: "POST" }), params(ready.id));
     expect(consumed.status).toBe(200);
-    expect((await consumed.json()).consumedAt).not.toBeNull();
+    const consumedBody = await consumed.json();
+    expect(consumedBody.consumedAt).not.toBeNull();
+    expect(consumedBody.first).toBe(true);
     expect((await (await listRoute(await authedReq(ws, "/api/dictations?field_key=k&open=1"))).json()).map((d: { id: string }) => d.id)).toEqual([dictation.id]);
+
+    // ?limit=abc invalide : Number(...) → NaN → ne doit jamais atteindre .limit(NaN) (500 Postgres) — replie sur le défaut (M1)
+    expect((await listRoute(await authedReq(ws, "/api/dictations?limit=abc"))).status).toBe(200);
 
     expect((await retryRoute(await authedReq(ws, `/api/dictations/${dictation.id}/retry`, { method: "POST" }), params(dictation.id))).status).toBe(409);
     await claimJob(ws.workspaceId, job.id, "w");

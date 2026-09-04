@@ -20,7 +20,11 @@ export function computeInsertion(
   return { value: before + inserted + after, caret: start + inserted.length };
 }
 
-export function insertAtCursor(el: HTMLInputElement | HTMLTextAreaElement, text: string): void {
+/** Rend `true` si l'élément existe et a reçu le texte, `false` sinon (ref
+ * démontée) — permet à l'appelant (deliver, M4) de savoir si la dictée a
+ * vraiment été insérée quelque part avant de la marquer consommée. */
+export function insertAtCursor(el: HTMLInputElement | HTMLTextAreaElement | null, text: string): boolean {
+  if (!el) return false;
   const single = el instanceof HTMLInputElement;
   const { value, caret } = computeInsertion(
     el.value, el.selectionStart ?? el.value.length, el.selectionEnd ?? el.value.length, text, { singleLine: single },
@@ -31,4 +35,5 @@ export function insertAtCursor(el: HTMLInputElement | HTMLTextAreaElement, text:
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.focus();
   try { el.setSelectionRange(caret, caret); } catch { /* type non sélectionnable */ }
+  return true;
 }

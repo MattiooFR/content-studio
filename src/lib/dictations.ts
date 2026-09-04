@@ -106,14 +106,23 @@ export async function failDictation(workspaceId: string, id: string, reason: str
   return row ?? null;
 }
 
-/** Le champ a inséré le texte. Idempotent : un second appel rend la ligne telle quelle. */
+/**
+ * Le champ a inséré le texte. Idempotent : un second appel rend la ligne
+ * telle quelle. `first` indique si CET appel a posé `consumedAt` (garde
+ * `isNull(consumedAt)`) — livraison « claim-first » (revue finale, I1) :
+ * quand plusieurs instances d'un même champ partagent la même clé (ou, plus
+ * généralement, si un même événement est traité deux fois), une seule doit
+ * insérer le texte ; `first: false` dit à l'appelant de retirer l'id de son
+ * compteur SANS rien insérer. `null` = dictée introuvable dans ce workspace.
+ */
 export async function consumeDictation(workspaceId: string, id: string) {
   const [row] = await db.update(dictations)
     .set({ consumedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(dictations.id, id), eq(dictations.workspaceId, workspaceId), isNull(dictations.consumedAt)))
     .returning();
-  if (row) { publish(row, "consumed"); return row; }
-  return getDictation(workspaceId, id);
+  if (row) { publish(row, "consumed"); return { ...row, first: true }; }
+  const existing = await getDictation(workspaceId, id);
+  return existing ? { ...existing, first: false } : null;
 }
 
 /** failed → pending, et repose le job (retry du dernier failed, sinon un neuf). */

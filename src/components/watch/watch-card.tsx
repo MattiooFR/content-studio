@@ -193,7 +193,12 @@ export function WatchCard({
           disabled={busy}
           rows={6}
           aria-label={`Texte adapté pour la proposition de ${nomAffiche}`}
-          className="min-h-32 flex-1 text-sm"
+          // Clé explicite : sans elle, toutes les cartes de la liste partagent
+          // la même clé par défaut (`/watch#textarea`) et une dictée livrée
+          // atterrit dans TOUTES les cartes montées (revue finale, I1).
+          dictation={{ fieldKey: `watch:${item.id}:text` }}
+          className="min-h-32 text-sm"
+          wrapperClassName="flex-1"
         />
 
         {error && (

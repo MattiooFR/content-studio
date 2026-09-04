@@ -107,6 +107,7 @@ POST /api/dictations (audio) ──▶ dictations(pending) + dictation_audio + j
 | `POST /api/dictations?field_key=` | session | corps = audio brut (`content-type` = mime). 201 `{ id, status }`. 400/413/415 comme la route audio des commentaires. |
 | `GET /api/dictations?status=&limit=` | session | tiroir : 50 dernières par défaut, plus récentes d'abord, sans l'audio. |
 | `GET /api/dictations?field_key=&open=1` | session | au montage d'un champ : ses dictées `pending` + `done` non consommées. |
+| `GET /api/dictations/[id]` | session | dictée complète — utilisée par le hook à l'arrivée d'un événement. |
 | `POST /api/dictations/[id]/retry` | session | 200 dictée, 409 si non `failed`, 404. |
 | `POST /api/dictations/[id]/consume` | session | 200 dictée ; idempotent. |
 | `DELETE /api/dictations/[id]` | session | 204 ; 404. |
@@ -155,7 +156,7 @@ prise en charge + ≈ 2 s de transcription pour 30 s d'audio.
   inchangé), poste l'audio, garde la liste des ids `pending` du champ.
 - S'abonne à `dictation.updated` : sur `done` d'un id du champ (ou d'un `field_key`
   identique), charge le texte, appelle `onText(text)`, puis `consume`.
-- Au montage : `GET /api/dictations?field_key=&pending=1` — reprend les `pending`
+- Au montage : `GET /api/dictations?field_key=&open=1` — reprend les `pending`
   (compteur) et insère les `done` non consommées (reload pendant la transcription).
 - Expose `{ supported, recording, pending: number, start, stop, error }`.
 
@@ -202,7 +203,7 @@ les commentaires se dictent via la `Textarea` du popover (§5.5).
   décommission dans une vague ultérieure.
 - Login/register : pas de micro (types email/password, et `dictation={false}` sur le nom).
 
-### 5.6 Tiroir « Dictées » (`src/components/dictations-tray.tsx`)
+### 5.6 Tiroir « Dictées » (page `src/app/(app)/dictations/page.tsx`)
 
 Entrée dans la barre latérale (section principale, sous les vues), badge = nombre de
 `pending`. Panneau : liste des 50 dernières dictées, plus récentes d'abord — statut

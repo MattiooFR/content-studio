@@ -101,7 +101,9 @@ describe("dictations — cycle transcribe", () => {
     const first = await consumeDictation(ws.workspaceId, c.dictation.id);
     const second = await consumeDictation(ws.workspaceId, c.dictation.id);
     expect(first?.consumedAt).not.toBeNull();
+    expect(first?.first).toBe(true);
     expect(second?.consumedAt?.getTime()).toBe(first?.consumedAt?.getTime());
+    expect(second?.first).toBe(false);
 
     const open = await listDictations(ws.workspaceId, { fieldKey: "k", open: true });
     expect(open.map((x) => x.id).sort()).toEqual([p.dictation.id, d.dictation.id].sort());

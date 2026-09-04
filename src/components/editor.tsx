@@ -240,7 +240,7 @@ export const ContentEditor = forwardRef<ContentEditorHandle, {
         <DictateButton
           fieldKey={`content:${contentId}:body`}
           recover
-          onText={(t) => { editor?.chain().focus().insertContent(t).run(); }}
+          onText={(t) => { editor?.chain().focus().insertContent(t).run(); return !!editor; }}
           className="absolute top-3 right-3"
         />
       </div>
