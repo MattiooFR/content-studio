@@ -109,9 +109,11 @@ export function ItemList({ items, bucket, loaded, selectedId, onSelect }: {
       {open && (
         <form onSubmit={create} className="grid gap-2 border-b border-line bg-raised/40 px-4 py-3">
           <Input autoFocus placeholder="Titre" value={title}
-            onChange={(e) => setTitle(e.target.value)} required />
+            onChange={(e) => setTitle(e.target.value)} required
+            dictation={{ fieldKey: "idea:new:title" }} />
           <Textarea placeholder="Notes, angle, sources…" value={notes}
-            onChange={(e) => setNotes(e.target.value)} rows={3} />
+            onChange={(e) => setNotes(e.target.value)} rows={3}
+            dictation={{ fieldKey: "idea:new:notes" }} />
           {error && <p className="text-xs text-danger">{error}</p>}
           <div className="flex justify-end">
             <Button type="submit" size="sm" disabled={submitting || !title.trim()}>

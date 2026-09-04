@@ -5,6 +5,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useWorkspaceEvents } from "@/hooks/use-workspace-events";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 // ---- types (formes JSON telles que rendues par /api/lanes, dates en ISO) --
 type Lane = {
@@ -643,7 +644,7 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
               )}
               {activeNotice && <p className="mb-2 text-xs text-warning">{activeNotice}</p>}
               <div className="flex items-end gap-2">
-                <textarea
+                <Textarea
                   ref={textareaRef}
                   value={activeDraft}
                   disabled={activeBusy}
@@ -662,7 +663,8 @@ export function ChatDrawerProvider({ children }: { children: React.ReactNode }) 
                     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
                   }}
                   rows={2}
-                  className="min-h-16 w-full flex-1 resize-none rounded-lg border border-line bg-raised px-2.5 py-2 text-sm text-ink outline-none placeholder:text-faint focus-visible:border-accent disabled:opacity-60"
+                  dictation={{ fieldKey: `chat:${activeLaneId}` }}
+                  className="min-h-16 resize-none border-line bg-raised text-sm text-ink placeholder:text-faint focus-visible:border-accent disabled:opacity-60"
                 />
                 <Button
                   type="button"

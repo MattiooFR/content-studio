@@ -30,7 +30,7 @@ export default function RegisterPage() {
           <h1 className="text-lg font-semibold">Créer un compte</h1>
           <form onSubmit={submit} className="space-y-3">
             <Input type="text" placeholder="nom" value={name}
-              onChange={(e) => setName(e.target.value)} required />
+              onChange={(e) => setName(e.target.value)} required dictation={false} />
             <Input type="email" placeholder="email" value={email}
               onChange={(e) => setEmail(e.target.value)} required />
             <Input type="password" placeholder="mot de passe" value={password}

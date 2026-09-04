@@ -184,14 +184,15 @@ export function IdeaDetail({ ideaId, onOpenItem }: { ideaId: string; onOpenItem:
       >
         <form onSubmit={addSourceSubmit} className="space-y-2">
           <Input placeholder="https://…" value={sourceUrl}
-            onChange={(e) => setSourceUrl(e.target.value)} />
+            onChange={(e) => setSourceUrl(e.target.value)} dictation={false} />
           {youtubeVideoId(sourceUrl.trim()) && (
             <p className="text-xs text-accent">
               Vidéo YouTube détectée — l&apos;audio sera transcrit en local (mlx-whisper).
             </p>
           )}
           <Textarea placeholder="…ou colle un texte" value={sourceText}
-            onChange={(e) => setSourceText(e.target.value)} rows={3} />
+            onChange={(e) => setSourceText(e.target.value)} rows={3}
+            dictation={{ fieldKey: `source:new:${ideaId}` }} />
           {sourceText.length > 1000 && (
             <p className="text-right text-[11px] text-faint tabular-nums">
               {sourceText.length.toLocaleString("fr-FR")} / 200 000 caractères

@@ -64,7 +64,7 @@ function sectionBefore(root: HTMLElement, offset: number): string {
  */
 export function ReviewPane({ contentId, body }: { contentId: string; body: string }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const { comments, error, createText, createVoice, update, remove } = useComments(contentId);
+  const { comments, error, createText, update, remove } = useComments(contentId);
   const [pending, setPending] = useState<{ anchor: Anchor; start: number; end: number } | null>(null);
   // On garde l'ID, pas la ligne : `useComments` remplace le tableau à chaque
   // rafraîchissement SSE, et un instantané de `CommentRow` ne suivrait jamais.
@@ -205,17 +205,6 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
               if (selected) await update(selected.id, { body: text });
               else await createText(text, general ? null : anchorForSave);
               close();
-            }}
-            onSaveVoice={async (blob, mime) => {
-              const created = await createVoice(blob, mime, general ? null : anchorForSave);
-              // On NE ferme PAS : on bascule le popover sur le commentaire
-              // qui vient d'être créé, pour que l'utilisateur voie
-              // « Transcription en cours… » puis le texte arriver par SSE.
-              // (`createVoice` a déjà rafraîchi la liste, donc `selected`
-              // résout immédiatement.) En cas d'échec, `created` est null et
-              // le message d'erreur du hook s'affiche sous le corps.
-              setPending(null); setGeneral(false);
-              setSelectedId(created?.id ?? null);
             }}
             onResolve={selected ? async () => { await update(selected.id, { status: "resolved" }); close(); } : undefined}
             onDelete={selected ? async () => { await remove(selected.id); close(); } : undefined}
