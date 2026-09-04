@@ -36,6 +36,7 @@ export default function DictationsPage() {
   }
 
   async function copy(d: Dictation) {
+    setError(null);
     try { await navigator.clipboard.writeText(d.text); setCopied(d.id); setTimeout(() => setCopied(null), 1500); }
     catch { setError("Presse-papiers indisponible."); }
   }
@@ -69,7 +70,7 @@ export default function DictationsPage() {
                     <Button size="sm" variant="outline" onClick={() => copy(d)}>{copied === d.id ? "Copié" : "Copier"}</Button>
                   )}
                   {d.status === "failed" && <Button size="sm" variant="outline" onClick={() => act(d.id, "retry")}>Réessayer</Button>}
-                  <Button size="sm" variant="outline" onClick={() => act(d.id, "delete")}>Supprimer</Button>
+                  <Button size="sm" variant="destructive" onClick={() => act(d.id, "delete")}>Supprimer</Button>
                 </div>
               </li>
             ))}
