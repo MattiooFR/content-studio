@@ -126,28 +126,27 @@ retry silencieux côté serveur.
 | `publish` | contenu → `approved` (corps non vide requis) | worker pose `link_publication` + `set_content_status(published)` |
 | `sync` | jamais par un bouton direct — créé par le hook de re-sync, ou par « Re-synchroniser » sur la carte publication | worker pose `mark_synced` |
 | `revise` | rien | worker `list_comments(open)` → réécrit → `update_content` → `resolve_comment(applied)` |
-| `transcribe` | jamais par un bouton — créé par la route de dictée | seule complétion qui écrit ailleurs que dans le job : `result.text` devient le corps du commentaire |
+| `transcribe` | jamais par un bouton — créé par la route de dictée des commentaires (legacy) et par `POST /api/dictations` (dictée d'un champ) | worker `GET /api/jobs/:id/audio` → ffmpeg → mlx-whisper → `complete_job({ text })` ; l'outil pose le texte sur le commentaire ou la dictée |
 | `extract` | dépôt d'une source url/vidéo (automatique), ou « Réessayer » sur une source échouée | worker `attach_extraction(source_id, texte, meta)` puis `complete_job` — le complete est refusé tant que la source n'est pas extraite |
 
 Tout autre `kind` est libre : l'outil l'accepte, le range dans la file, et laisse le
 worker et l'UI convenir de son sens (pastille générique, pas d'effet automatique).
 
-### Extraction des sources : le worker fourni
+### Le worker fourni : extraction ET dictée
 
-Les jobs `extract` (articles → Readability, vidéos YouTube → yt-dlp +
-mlx-whisper en local) ont un worker déterministe prêt à l'emploi — aucun
-token LLM :
+Un seul process sur le Mac consomme les jobs `extract` (articles → Readability,
+vidéos YouTube → yt-dlp + mlx-whisper) et `transcribe` (dictées et commentaires
+vocaux → ffmpeg + mlx-whisper résident, ≈ 2 s par dictée) :
 
 ```sh
-CS_MCP_URL=http://localhost:3003/api/mcp CS_MCP_TOKEN=cs_… \
-  node scripts/extract-worker.mjs        # boucle (poll 15 s) ; --once pour un seul passage
+CS_MCP_URL=http://localhost:3003/api/mcp CS_MCP_TOKEN=cs_… npm run worker   # ou node scripts/worker.mjs [--once]
 ```
 
-Prérequis sur la machine du worker : `yt-dlp` et `mlx_whisper` dans le PATH
-(Apple Silicon pour mlx), et un `npm install` AVEC les devDependencies
-(jamais `--omit=dev` : le script s'appuie sur `@mozilla/readability`,
-`linkedom` et le SDK MCP installés en dev). Un agent MCP peut aussi consommer
-ces jobs à la main en suivant le tableau ci-dessus.
+Il s'abonne à `/api/events` avec son token pour traiter un job dès qu'il est posé
+(le poll de 15 s reste le filet). Réglages par env : `CS_WHISPER_MODEL`,
+`CS_WHISPER_LANG` (fr), `CS_WHISPER_PROMPT` (vocabulaire d'amorçage), `CS_PYTHON`
+(défaut : le venv `~/.claude/tools/yt-transcript`). Prérequis : `ffmpeg`, `yt-dlp`,
+mlx-whisper dans ce venv (Apple Silicon), `npm install` AVEC les devDependencies.
 
 ### Publications
 

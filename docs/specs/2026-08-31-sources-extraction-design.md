@@ -25,7 +25,7 @@ d'écrire un article FR, des posts X FR/EN, un script YouTube depuis ce corpus.
 - **Toute extraction passe par un job worker** — y compris les articles (pas de fetch
   serveur : cohérence, pas de SSRF, l'app peut tourner en Docker sans réseau sortant ni
   GPU).
-- **Worker : « les deux »** — un script déterministe dédié (`scripts/extract-worker.mjs`,
+- **Worker : « les deux »** — un script déterministe dédié (`scripts/worker.mjs`,
   zéro token LLM) ET le kind documenté dans le README worker pour qu'un Claude branché en
   MCP puisse le faire en dépannage.
 
@@ -123,14 +123,15 @@ s'abonne (use-workspace-events, comme `job.updated`) et rafraîchit sa liste de 
 
 ---
 
-## 3. Worker script — `scripts/extract-worker.mjs`
+## 3. Worker script — `scripts/worker.mjs`
 
 Node ESM, tourne sur le Mac (là où vivent yt-dlp et mlx-whisper). Ne touche jamais la
 base : il parle exclusivement MCP, comme n'importe quel worker.
 
 - **Config env** : `CS_MCP_URL` (ex. `http://localhost:3003/api/mcp`), `CS_MCP_TOKEN`
   (token workspace). `--once` : un seul passage puis exit (cron/launchd) ; défaut :
-  boucle, poll toutes les 15 s. `worker_label` = `extract-worker@<hostname>`.
+  boucle, poll toutes les 15 s. `worker_label` = `worker@<hostname>` (Task 4 : script renommé
+  `scripts/worker.mjs`, un seul process traite aussi les jobs `transcribe`).
 - **Client MCP** : `@modelcontextprotocol/sdk` (déjà présent en peer de mcp-handler),
   transport streamable HTTP + Bearer.
 - **Boucle** : `list_jobs({status:"queued", kind:"extract"})` → pour chaque job :
@@ -148,7 +149,8 @@ base : il parle exclusivement MCP, comme n'importe quel worker.
 - **kind `video`** : `yt-dlp -x --audio-format m4a -o <tmp>` (répertoire temporaire
   dédié, nettoyé en `finally`) → `mlx_whisper --model mlx-community/whisper-large-v3-turbo`
   → texte brut ; meta `{title (yt-dlp), duration_s, model: "whisper-large-v3-turbo",
-  tool: "extract-worker"}`. Binaire manquant (yt-dlp ou mlx_whisper introuvable) →
+  tool: <identifiant littéral conservé tel quel dans le code, non renommé par Task 4>}`.
+  Binaire manquant (yt-dlp ou mlx_whisper introuvable) →
   `fail_job` explicite, jamais un crash de la boucle.
 - **Déviation assumée (revue finale, durcissement sécurité)** : l'appel `yt-dlp` insère
   une sentinelle `--` avant la ref pour qu'une URL commençant par `-` ne soit jamais
@@ -158,7 +160,7 @@ base : il parle exclusivement MCP, comme n'importe quel worker.
 
 **README** : la table des kinds worker gagne la ligne `extract` (« cible source, créé au
 dépôt d'une url/vidéo ; le worker appelle attach_extraction puis complete_job ; script
-fourni : `node scripts/extract-worker.mjs` ») — suffisant pour qu'un Claude worker le
+fourni : `node scripts/worker.mjs` ») — suffisant pour qu'un Claude worker le
 fasse à la main en dépannage.
 
 ---

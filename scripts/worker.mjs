@@ -1,24 +1,26 @@
 #!/usr/bin/env node
-// scripts/extract-worker.mjs — worker d'extraction des sources.
+// scripts/worker.mjs — LE worker local de content-studio.
 //
-// Tourne sur le Mac (là où vivent yt-dlp et mlx_whisper) et parle
+// Tourne sur le Mac (là où vivent yt-dlp, ffmpeg et mlx-whisper) et parle
 // EXCLUSIVEMENT MCP à content-studio, comme n'importe quel worker — jamais
 // la base en direct.
 //
 //   CS_MCP_URL=http://localhost:3003/api/mcp CS_MCP_TOKEN=cs_… \
-//     node scripts/extract-worker.mjs [--once]
+//     node scripts/worker.mjs [--once]
 //
-// kinds pris en charge (payload.source_kind) :
-//   url   → fetch + Readability (HTML uniquement — un PDF est refusé avec un
-//           message qui invite à déposer le texte à la main)
-//   video → yt-dlp -x (audio temporaire) + mlx_whisper (large-v3-turbo)
-// Tout échec → fail_job(message lisible) : la source passe failed côté outil,
-// le bouton Réessayer la remet en pending.
+// kinds pris en charge :
+//   extract     (cible source)  url → fetch + Readability ; video → yt-dlp + mlx_whisper CLI
+//   transcribe  (cible comment OU dictation) audio → ffmpeg → mlx-whisper RÉSIDENT → complete_job({ text })
+//
+// Temps réel : le worker s'abonne à /api/events (Bearer) et traite un job
+// queued dès son apparition ; le poll toutes les 15 s reste le filet.
+// Tout échec → fail_job(message lisible) ; la cible passe failed côté outil.
 
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,22 +28,28 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 
 const run = promisify(execFile);
+const HERE = dirname(fileURLToPath(import.meta.url));
 const MCP_URL = process.env.CS_MCP_URL;
 const MCP_TOKEN = process.env.CS_MCP_TOKEN;
 const WHISPER_MODEL = process.env.CS_WHISPER_MODEL ?? "mlx-community/whisper-large-v3-turbo";
+const PYTHON = process.env.CS_PYTHON ?? `${process.env.HOME}/.claude/tools/yt-transcript/venv/bin/python`;
 const ONCE = process.argv.includes("--once");
 const POLL_MS = 15_000;
 const HEARTBEAT_MS = 60_000; // le serveur bascule un running en failed après 10 min de silence
-const WORKER_LABEL = `extract-worker@${hostname()}`;
+const MODEL_IDLE_MS = 15 * 60_000; // modèle déchargé après 15 min sans dictée (~0,9 Go de RAM)
+const KINDS = new Set(["extract", "transcribe"]);
+const WORKER_LABEL = `worker@${hostname()}`;
 
 if (!MCP_URL || !MCP_TOKEN) {
   console.error("CS_MCP_URL et CS_MCP_TOKEN requis (token workspace : UI → Réglages → Tokens MCP)");
   process.exit(1);
 }
+const BASE = MCP_URL.replace(/\/api\/mcp\/?$/, "");
+const log = (...a) => console.log(new Date().toLocaleTimeString(), ...a);
 
 let client;
 async function connect() {
-  client = new Client({ name: "extract-worker", version: "1.0.0" });
+  client = new Client({ name: "content-studio-worker", version: "2.0.0" });
   const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), {
     requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } },
   });
@@ -63,8 +71,7 @@ async function call(name, args = {}) {
   return data;
 }
 
-// ---- extracteurs -----------------------------------------------------------
-
+// ---- extracteurs (kind extract) — INCHANGÉS, repris de extract-worker.mjs ----
 // Hôtes interdits : le worker tourne sur le Mac du propriétaire — ne jamais
 // aspirer le LAN pour le compte d'un membre du workspace. DNS-rebinding hors
 // périmètre (outil personnel) : on filtre schéma, hôtes et IP littérales,
@@ -183,28 +190,112 @@ async function extractVideo(ref) {
   }
 }
 
+// ---- transcripteur résident (kind transcribe) ------------------------------
+// Le modèle pèse ~0,9 Go : il démarre à la première dictée, reste chargé
+// tant que ça dicte, et s'efface après MODEL_IDLE_MS sans travail.
+let py = null, pyReady = false, waiting = [], idleTimer = null, stopping = false;
+
+function armIdle() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (py && !waiting.length) { log("modèle déchargé (inactivité)"); stopping = true; py.stdin.end(); }
+  }, MODEL_IDLE_MS);
+}
+
+function ensurePython() {
+  if (py) return;
+  stopping = false;
+  log("chargement du modèle mlx-whisper…");
+  py = spawn(PYTHON, [join(HERE, "transcribe-worker.py")], {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: { ...process.env, CS_WHISPER_MODEL: WHISPER_MODEL },
+  });
+  let buf = "";
+  py.stdout.on("data", (d) => {
+    buf += d.toString();
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+      if (msg.ready) { pyReady = true; log("modèle chargé — prêt à transcrire"); continue; }
+      const resolve = waiting.shift();
+      if (resolve) resolve(msg);
+      if (!waiting.length) armIdle();
+    }
+  });
+  py.on("error", (e) => {
+    // ENOENT = python du venv introuvable : les dictées en attente échouent proprement
+    const message = e?.code === "ENOENT" ? `python introuvable : ${PYTHON} (CS_PYTHON)` : e.message;
+    waiting.forEach((r) => r({ error: message })); waiting = [];
+  });
+  py.on("exit", (code) => {
+    const expected = stopping;
+    py = null; pyReady = false;
+    waiting.forEach((r) => r({ error: "transcripteur arrêté" })); waiting = [];
+    if (!expected) log(`transcripteur arrêté (code ${code}) — il repartira à la prochaine dictée`);
+  });
+}
+
+function transcribeWav(wav) {
+  ensurePython();
+  clearTimeout(idleTimer);
+  return new Promise((resolve) => { waiting.push(resolve); py.stdin.write(wav + "\n"); });
+}
+
+async function transcribeJob(job) {
+  const res = await fetch(`${BASE}/api/jobs/${job.id}/audio`, {
+    headers: { Authorization: `Bearer ${MCP_TOKEN}` }, signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`audio introuvable (${res.status})`);
+  const dir = await mkdtemp(join(tmpdir(), "cs-dictee-"));
+  try {
+    const src = join(dir, "in.bin");
+    await writeFile(src, Buffer.from(await res.arrayBuffer()));
+    const wav = join(dir, "audio.wav");
+    try {
+      await run("ffmpeg", ["-v", "error", "-i", src, "-ac", "1", "-ar", "16000", "-y", wav]);
+    } catch (e) {
+      if (e?.code === "ENOENT") throw new Error("binaire manquant : ffmpeg (PATH du worker)");
+      throw new Error(`ffmpeg : ${String(e.message).split("\n")[0]}`);
+    }
+    const out = await transcribeWav(wav);
+    if (out.error) throw new Error(out.error);
+    return { text: out.text, sec: out.sec };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 // ---- boucle ---------------------------------------------------------------
 
 async function processJob(job) {
   try {
     await call("claim_job", { job_id: job.id, worker_label: WORKER_LABEL });
   } catch (e) {
-    console.log(`claim perdu ${job.id} (${e.message})`);
+    log(`claim perdu ${job.id} (${e.message})`);
     return;
   }
   const heartbeat = setInterval(() => {
     call("heartbeat_job", { job_id: job.id }).catch(() => {});
   }, HEARTBEAT_MS);
   try {
-    const { source_kind, ref } = job.payload ?? {};
-    if (typeof ref !== "string" || !ref) throw new Error("payload.ref manquant");
-    console.log(`extract ${source_kind} ${ref}`);
-    const { text, meta } = await (source_kind === "video" ? extractVideo(ref) : extractUrl(ref));
-    await call("attach_extraction", {
-      source_id: job.targetId, extracted_text: text, extracted_meta: meta,
-    });
-    await call("complete_job", { job_id: job.id });
-    console.log(`done ${job.id} (${text.length} caractères)`);
+    if (job.kind === "extract") {
+      const { source_kind, ref } = job.payload ?? {};
+      if (typeof ref !== "string" || !ref) throw new Error("payload.ref manquant");
+      log(`extract ${source_kind} ${ref}`);
+      const { text, meta } = await (source_kind === "video" ? extractVideo(ref) : extractUrl(ref));
+      await call("attach_extraction", { source_id: job.targetId, extracted_text: text, extracted_meta: meta });
+      await call("complete_job", { job_id: job.id });
+      log(`done ${job.id} (${text.length} caractères)`);
+    } else if (job.kind === "transcribe") {
+      log(`transcribe ${job.targetType} ${job.targetId}`);
+      const { text, sec } = await transcribeJob(job);
+      await call("complete_job", { job_id: job.id, result: { text } });
+      log(`done ${job.id} (${sec}s) : ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}`);
+    }
   } catch (e) {
     const message = (e instanceof Error ? e.message : String(e)).slice(0, 2000);
     console.error(`échec ${job.id} : ${message}`);
@@ -215,15 +306,60 @@ async function processJob(job) {
 }
 
 async function tick() {
-  const jobs = await call("list_jobs", { status: "queued", kind: "extract" });
+  const jobs = await call("list_jobs", { status: "queued" });
   for (const job of Array.isArray(jobs) ? jobs : []) {
-    if (job.targetType !== "source") continue;
+    if (!KINDS.has(job.kind)) continue;
+    if (job.kind === "extract" && job.targetType !== "source") continue;
+    if (job.kind === "transcribe" && job.targetType !== "comment" && job.targetType !== "dictation") continue;
     await processJob(job);
   }
 }
 
+// Réveil : un tour de boucle dès qu'un job queued apparaît (SSE), sans attendre le poll.
+let wake = () => {};
+const sleepOrWake = (ms) => new Promise((resolve) => {
+  const t = setTimeout(resolve, ms);
+  wake = () => { clearTimeout(t); resolve(); };
+});
+
+async function watchEvents() {
+  for (;;) {
+    try {
+      const res = await fetch(`${BASE}/api/events`, {
+        headers: { Authorization: `Bearer ${MCP_TOKEN}`, accept: "text/event-stream" },
+      });
+      if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
+      log("abonné aux événements du workspace");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const data = frame.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
+          if (!data) continue;
+          try {
+            const e = JSON.parse(data);
+            if (e.type === "job.updated" && e.status === "queued" && KINDS.has(e.kind)) wake();
+          } catch { /* trame illisible */ }
+        }
+      }
+      throw new Error("flux fermé");
+    } catch (e) {
+      log(`événements : ${e.message} — reconnexion dans 3 s`);
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+
 await connect();
-console.log(`${WORKER_LABEL} branché sur ${MCP_URL}${ONCE ? " (--once)" : ""}`);
+log(`${WORKER_LABEL} branché sur ${MCP_URL}${ONCE ? " (--once)" : ""}`);
+if (!ONCE) watchEvents();
 do {
   try {
     await tick();
@@ -232,6 +368,7 @@ do {
     // session MCP expirée ou serveur redémarré : on se rebranche
     try { await connect(); } catch { /* retentera au prochain tour */ }
   }
-  if (!ONCE) await new Promise((r) => setTimeout(r, POLL_MS));
+  if (!ONCE) await sleepOrWake(POLL_MS);
 } while (!ONCE);
+if (py) { stopping = true; py.stdin.end(); }
 process.exit(0);

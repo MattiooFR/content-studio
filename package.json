@@ -8,6 +8,7 @@
     "start": "next start -H 127.0.0.1 -p 3003",
     "start:docker": "next start -H 0.0.0.0 -p 3003",
     "test": "vitest run",
+    "worker": "node scripts/worker.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },
