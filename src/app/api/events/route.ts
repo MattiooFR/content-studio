@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireWorkspace, TenantError } from "@/lib/tenant";
+import { requireWorkspace, resolveMcpToken, TenantError } from "@/lib/tenant";
 import { bus } from "@/lib/events";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
-    const { workspaceId } = await requireWorkspace(req.headers);
+    // Deux clients : le navigateur (session) et un worker (token MCP en
+    // Bearer) qui veut voir les jobs queued sans attendre son prochain poll.
+    const authz = req.headers.get("authorization");
+    let workspaceId: string;
+    if (authz) {
+      const resolved = await resolveMcpToken(authz);
+      if (!resolved) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+      workspaceId = resolved.workspaceId;
+    } else {
+      ({ workspaceId } = await requireWorkspace(req.headers));
+    }
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream({
