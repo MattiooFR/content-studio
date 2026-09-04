@@ -3,6 +3,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
+import { DictateButton } from "@/components/dictate-button";
 
 // tiptap-markdown@0.9.0 exporte `MarkdownStorage` mais ne le fusionne pas dans
 // l'interface `Storage` de @tiptap/core (le point d'extension attendu par tiptap
@@ -233,8 +234,15 @@ export const ContentEditor = forwardRef<ContentEditorHandle, {
 
   return (
     <div className="space-y-1.5">
-      <div className="min-h-[400px] rounded-xl border border-line bg-surface p-6 transition-colors duration-150 focus-within:border-line-strong">
+      <div className="relative min-h-[400px] rounded-xl border border-line bg-surface p-6 transition-colors duration-150 focus-within:border-line-strong">
         <EditorContent editor={editor} />
+        {/* Dictée au curseur : insertContent passe par onUpdate, donc par l'autosave. */}
+        <DictateButton
+          fieldKey={`content:${contentId}:body`}
+          recover
+          onText={(t) => { editor?.chain().focus().insertContent(t).run(); }}
+          className="absolute top-3 right-3"
+        />
       </div>
       <p className="h-4 text-xs text-muted">
         {saveStatus === "saving" && "Enregistrement…"}
