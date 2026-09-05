@@ -86,6 +86,9 @@ POST /api/dictations (audio) ──▶ dictations(pending) + dictation_audio + j
    DELETE /api/dictations/:id ──▶ ligne + audio supprimés (annule un job queued)
 ```
 
+- **Plafond du `result`** (polish post-merge) : un job `transcribe` accepte un `result` jusqu'à
+  512 Kio (`MAX_TRANSCRIBE_RESULT_BYTES`, aligné sur les 200 000 caractères de texte) au lieu
+  des 64 Kio des autres kinds — un transcript de 3 h ne doit pas échouer en « result trop gros ».
 - **Garde `completeJob`** (même pattern que transcribe/comment) : un job `transcribe`
   ciblant une dictée exige `result.text: string`, vérifié AVANT `finish` — sinon erreur,
   le job reste `running`.
