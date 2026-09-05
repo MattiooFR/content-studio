@@ -9,7 +9,8 @@ import type { CommentRow } from "@/components/review/use-comments";
  * Textarea, posée au-dessus du corps en lecture. Cmd/Ctrl+Entrée enregistre,
  * Échap ferme.
  */
-export function CommentPopover({ existing, onSaveText, onResolve, onDelete, onClose, style }: {
+export function CommentPopover({ contentId, existing, onSaveText, onResolve, onDelete, onClose, style }: {
+  contentId: string;
   existing: CommentRow | null;
   onSaveText: (body: string) => Promise<void>;
   onResolve?: () => Promise<void>;
@@ -40,7 +41,9 @@ export function CommentPopover({ existing, onSaveText, onResolve, onDelete, onCl
         <p className="mb-2 text-xs text-danger">Transcription échouée — écris la remarque à la main.</p>
       )}
       <Textarea ref={ref} rows={3} value={text} onChange={(e) => setText(e.target.value)}
-        dictation={{ fieldKey: existing ? `comment:${existing.id}` : "comment:new" }}
+        // Clé scopée par contenu : une dictée finie après fermeture ne doit pas
+        // atterrir dans le popover « nouveau commentaire » d'un AUTRE contenu.
+        dictation={{ fieldKey: existing ? `comment:${existing.id}` : `comment:new:${contentId}` }}
         placeholder={existing ? "Modifier la remarque…" : "Ta remarque (Cmd+Entrée pour enregistrer, ou dicte-la)"} />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={() => text.trim() && onSaveText(text.trim())} disabled={!text.trim()}>

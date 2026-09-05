@@ -236,11 +236,17 @@ export const ContentEditor = forwardRef<ContentEditorHandle, {
     <div className="space-y-1.5">
       <div className="relative min-h-[400px] rounded-xl border border-line bg-surface p-6 transition-colors duration-150 focus-within:border-line-strong">
         <EditorContent editor={editor} />
-        {/* Dictée au curseur : insertContent passe par onUpdate, donc par l'autosave. */}
+        {/* Dictée au curseur : insertContent passe par onUpdate, donc par l'autosave.
+            Nœud texte brut (pas une string) : tiptap-markdown parserait « * »,
+            « _ » ou les backticks dictés comme du markdown. */}
         <DictateButton
           fieldKey={`content:${contentId}:body`}
           recover
-          onText={(t) => { editor?.chain().focus().insertContent(t).run(); return !!editor; }}
+          onText={(t) => {
+            if (!editor || !t.trim()) return false;
+            editor.chain().focus().insertContent({ type: "text", text: t }).run();
+            return true;
+          }}
           className="absolute top-3 right-3"
         />
       </div>

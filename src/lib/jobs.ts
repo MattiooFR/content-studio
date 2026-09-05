@@ -10,6 +10,10 @@ export type Job = typeof agentJobs.$inferSelect;
 export const SILENT_AFTER_MS = 10 * 60_000;
 export const MAX_JOB_ERROR_LENGTH = 2000;
 export const MAX_JOB_JSON_BYTES = 64 * 1024;
+// Le texte d'un transcribe vit dans result : un transcript de 3 h dépasse
+// les 64 Kio des autres kinds. Plafond aligné sur MAX_DICTATION_TEXT_LENGTH
+// (200 000 caractères + enveloppe JSON), jamais tronqué en silence.
+export const MAX_TRANSCRIBE_RESULT_BYTES = 512 * 1024;
 export const MAX_JOB_KIND_LENGTH = 64;
 export const SILENT_ERROR = "agent silencieux (aucun battement depuis 10 min)";
 
@@ -210,11 +214,12 @@ async function finish(workspaceId: string, id: string, set: Partial<typeof agent
 }
 
 export async function completeJob(workspaceId: string, id: string, result: Record<string, unknown> = {}): Promise<Job | null> {
-  if (jsonBytes(result) > MAX_JOB_JSON_BYTES) throw new Error(`result trop gros (max ${MAX_JOB_JSON_BYTES} octets)`);
+  const current = await getJob(workspaceId, id);
+  const maxResult = current?.kind === "transcribe" ? MAX_TRANSCRIBE_RESULT_BYTES : MAX_JOB_JSON_BYTES;
+  if (jsonBytes(result) > maxResult) throw new Error(`result trop gros (max ${maxResult} octets)`);
   // Un transcribe (commentaire OU dictée) sans result.text ne doit jamais
   // passer done avec une cible qui resterait pending pour toujours : vérifié
   // AVANT finish, le job reste running (retry possible).
-  const current = await getJob(workspaceId, id);
   if (current?.kind === "transcribe" && (current.targetType === "comment" || current.targetType === "dictation")
     && typeof result.text !== "string")
     throw new Error("result.text requis pour un job transcribe");

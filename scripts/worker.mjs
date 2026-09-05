@@ -251,8 +251,13 @@ function ensurePython() {
     reset(message);
   });
   child.on("exit", (code) => {
-    if (!stopping) log(`transcripteur arrêté (code ${code}) — il repartira à la prochaine dictée`);
-    reset("transcripteur arrêté");
+    // Mort avant le `ready` = le venv ne démarre pas (mlx_whisper absent,
+    // python cassé) : un message qui dit quoi faire, pas un « arrêté » muet.
+    const message = pyReady || stopping
+      ? "transcripteur arrêté"
+      : `transcripteur impossible à démarrer (code ${code}) — vérifie CS_PYTHON (${PYTHON}) et \`pip install mlx-whisper\` dans ce venv`;
+    if (!stopping) log(`${message} — il repartira à la prochaine dictée`);
+    reset(message);
   });
   // Belt-and-braces : rattrape les cas où 'exit' ne serait jamais émis après un 'error' de spawn.
   child.on("close", () => reset("transcripteur arrêté"));
@@ -301,6 +306,7 @@ async function transcribeJob(job) {
     }
     const out = await transcribeWav(wav);
     if (out.error) throw new Error(out.error);
+    if (!out.text?.trim()) throw new Error("transcript vide (silence ou audio inaudible)");
     return { text: out.text, sec: out.sec };
   } finally {
     await rm(dir, { recursive: true, force: true });

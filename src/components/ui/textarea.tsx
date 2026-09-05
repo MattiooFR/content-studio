@@ -23,6 +23,9 @@ export function defaultFieldKey(pathname: string, props: { name?: string; id?: s
 
 function Textarea({ className, dictation, wrapperClassName, ref, ...props }: React.ComponentProps<"textarea"> & { dictation?: DictationProp; wrapperClassName?: string }) {
   const inner = React.useRef<HTMLTextAreaElement>(null);
+  // Mémoïsée : un callback neuf à chaque rendu ferait détacher/rattacher les
+  // deux refs à chaque frappe d'un champ contrôlé.
+  const mergedRef = React.useMemo(() => mergeRefs(inner, ref), [ref]);
   const pathname = usePathname();
   // Conteneur posé dès que la dictée n'est pas désactivée, INDÉPENDAMMENT de
   // disabled/readOnly : sinon chaque bascule de `disabled` change la forme de
@@ -33,7 +36,7 @@ function Textarea({ className, dictation, wrapperClassName, ref, ...props }: Rea
   const fieldKey = (dictation && dictation.fieldKey) || defaultFieldKey(pathname, props, "textarea");
   const el = (
     <textarea
-      ref={mergeRefs(inner, ref)}
+      ref={mergedRef}
       data-slot="textarea"
       className={cn(
         "flex field-sizing-content min-h-16 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:disabled:bg-input/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",

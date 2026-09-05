@@ -199,6 +199,7 @@ export function ReviewPane({ contentId, body }: { contentId: string; body: strin
         </div>
         {(pending || selected || general) && (
           <CommentPopover
+            contentId={contentId}
             existing={selected}
             style={general ? { top: 8, right: 8 } : popoverStyle}
             onSaveText={async (text) => {

@@ -69,6 +69,19 @@ describe("dictations — cycle transcribe", () => {
     expect((await getDictation(ws.workspaceId, b.dictation.id))?.status).toBe("done");
   });
 
+  it("complete_job d'un transcribe accepte un long transcript (> 64 Kio) mais refuse au-delà du plafond dédié", async () => {
+    const ws = await signUpTestUser();
+    const long = await createDictation(ws.workspaceId, { audio: audio(), mime: "audio/webm", fieldKey: "long" });
+    await claimJob(ws.workspaceId, long.job.id, "w");
+    const done = await completeJob(ws.workspaceId, long.job.id, { text: "mot ".repeat(37_500) }); // ~150 Ko
+    expect(done?.status).toBe("done");
+    expect((await getDictation(ws.workspaceId, long.dictation.id))?.text.length).toBe(150_000);
+
+    const huge = await createDictation(ws.workspaceId, { audio: audio(), mime: "audio/webm", fieldKey: "huge" });
+    await claimJob(ws.workspaceId, huge.job.id, "w");
+    await expect(completeJob(ws.workspaceId, huge.job.id, { text: "x".repeat(600_000) })).rejects.toThrow(/result trop gros/);
+  });
+
   it("applyDictation refuse un texte au-delà de MAX_DICTATION_TEXT_LENGTH", async () => {
     const ws = await signUpTestUser();
     const { dictation } = await createDictation(ws.workspaceId, { audio: audio(), mime: "audio/webm" });

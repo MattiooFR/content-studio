@@ -14,6 +14,7 @@ const NO_DICTATION_TYPES = new Set(["email", "password", "url", "number", "searc
 
 function Input({ className, type, dictation, wrapperClassName, ref, ...props }: React.ComponentProps<"input"> & { dictation?: DictationProp; wrapperClassName?: string }) {
   const inner = React.useRef<HTMLInputElement>(null);
+  const mergedRef = React.useMemo(() => mergeRefs(inner, ref), [ref]); // même raison que Textarea
   const pathname = usePathname();
   // Conteneur posé dès que la dictée n'est pas désactivée (et le type non
   // exclu), INDÉPENDAMMENT de disabled/readOnly — cf. commentaire de
@@ -24,7 +25,7 @@ function Input({ className, type, dictation, wrapperClassName, ref, ...props }: 
   const fieldKey = (dictation && dictation.fieldKey) || defaultFieldKey(pathname, props, "input");
   const el = (
     <InputPrimitive
-      ref={mergeRefs(inner, ref)}
+      ref={mergedRef}
       type={type}
       data-slot="input"
       className={cn(

@@ -130,7 +130,11 @@ export async function retryDictation(workspaceId: string, id: string) {
   const existing = await getDictation(workspaceId, id);
   if (!existing) return null;
   if (existing.status !== "failed") throw new Error(`réessai refusé : dictée en statut ${existing.status}`);
-  if (!(await getDictationAudio(workspaceId, id))) throw new Error("réessai refusé : audio absent");
+  // Présence seule (le workspace est déjà vérifié par getDictation) : ne pas
+  // charger jusqu'à 16 Mio de bytea juste pour un test d'existence.
+  const [audio] = await db.select({ size: dictationAudio.size }).from(dictationAudio)
+    .where(eq(dictationAudio.dictationId, id));
+  if (!audio) throw new Error("réessai refusé : audio absent");
   const [row] = await db.update(dictations)
     .set({ status: "pending", error: null, updatedAt: new Date() })
     .where(and(eq(dictations.id, id), eq(dictations.workspaceId, workspaceId), eq(dictations.status, "failed")))
